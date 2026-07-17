@@ -8,3 +8,4 @@ correction: run lefthook install explicitly inside the task worktree before its 
 decision: Cache parsed rollout state by app-server PID, file size, and modification time so five-second activity polling does not repeatedly parse unchanged task histories.
 decision: Treat both task_complete and turn_aborted as terminal lifecycle events; interrupted turns do not always emit task_complete before the next turn.
 decision: Never force-kill ChatGPT Desktop. A quit timeout aborts the update; a replacement readiness failure restores and relaunches the verified prior bundle.
+decision: The real restart proof must run from Terminal against a naturally newer stable appcast build, exercise two deliberate task interruptions of the idle countdown, and retain before/after JSON, watcher logs, signature checks, PIDs, and human UI observations.
