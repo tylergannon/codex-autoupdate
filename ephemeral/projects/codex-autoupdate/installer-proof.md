@@ -1,6 +1,6 @@
 # Installer proof
 
-Proved branch head: pending implementation checkpoint.
+Proved implementation checkpoint: `b9f6539` (`feat: add agent-first installer`).
 
 ## Claims demonstrated before release
 
@@ -26,6 +26,8 @@ Proved branch head: pending implementation checkpoint.
 - `git diff --check`
 
 All passed on the implementation worktree.
+
+Claude Fable independently reviewed the implementation and proof in `ephemeral/reviews/202607171135-installer-implementation-round-04.md`, reran the gates and focused tests, and concluded that only nitpicks remain. Real launchctl behavior after bootstrap is intentionally covered by the post-tag dogfood proof below.
 
 ## Post-tag live proof
 
