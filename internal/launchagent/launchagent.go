@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/xml"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"os/user"
@@ -32,25 +31,37 @@ type Config struct {
 }
 
 type Manager struct {
-	HomeDir string
-	UID     int
+	HomeDir      string
+	UID          int
+	Runner       Runner
+	RequireAdmin func() error
+}
+
+type Runner interface {
+	CombinedOutput(ctx context.Context, name string, args ...string) ([]byte, error)
+}
+
+type execRunner struct{}
+
+func (execRunner) CombinedOutput(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
 
 func (m Manager) Install(ctx context.Context, config Config) error {
-	if err := requireAdminUser(); err != nil {
+	if err := m.requireAdmin(); err != nil {
 		return err
 	}
 	paths, err := m.paths()
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(paths.binary), 0o755); err != nil {
-		return fmt.Errorf("create application support directory: %w", err)
+	if err := validateApp(config.AppPath); err != nil {
+		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(paths.stdout), 0o755); err != nil {
 		return fmt.Errorf("create log directory: %w", err)
 	}
-	if err := copyExecutable(config.Executable, paths.binary); err != nil {
+	if err := validateCanonicalExecutable(config.Executable, paths.binary); err != nil {
 		return err
 	}
 	config.Executable = paths.binary
@@ -63,11 +74,11 @@ func (m Manager) Install(ctx context.Context, config Config) error {
 	}
 	domain := "gui/" + strconv.Itoa(paths.uid)
 	target := domain + "/" + Label
-	_ = exec.CommandContext(ctx, "/bin/launchctl", "bootout", target).Run()
-	if output, err := exec.CommandContext(ctx, "/bin/launchctl", "bootstrap", domain, paths.plist).CombinedOutput(); err != nil {
+	_, _ = m.runner().CombinedOutput(ctx, "/bin/launchctl", "bootout", target)
+	if output, err := m.runner().CombinedOutput(ctx, "/bin/launchctl", "bootstrap", domain, paths.plist); err != nil {
 		return commandError("bootstrap LaunchAgent", output, err)
 	}
-	if output, err := exec.CommandContext(ctx, "/bin/launchctl", "kickstart", "-k", target).CombinedOutput(); err != nil {
+	if output, err := m.runner().CombinedOutput(ctx, "/bin/launchctl", "kickstart", target); err != nil {
 		return commandError("start LaunchAgent", output, err)
 	}
 	return nil
@@ -79,7 +90,7 @@ func (m Manager) Uninstall(ctx context.Context) error {
 		return err
 	}
 	target := "gui/" + strconv.Itoa(paths.uid) + "/" + Label
-	_ = exec.CommandContext(ctx, "/bin/launchctl", "bootout", target).Run()
+	_, _ = m.runner().CombinedOutput(ctx, "/bin/launchctl", "bootout", target)
 	if err := os.Remove(paths.plist); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove LaunchAgent plist: %w", err)
 	}
@@ -95,7 +106,7 @@ func (m Manager) Status(ctx context.Context) (string, error) {
 		return "", err
 	}
 	target := "gui/" + strconv.Itoa(paths.uid) + "/" + Label
-	output, err := exec.CommandContext(ctx, "/bin/launchctl", "print", target).CombinedOutput()
+	output, err := m.runner().CombinedOutput(ctx, "/bin/launchctl", "print", target)
 	if err != nil {
 		return "", commandError("read LaunchAgent status", output, err)
 	}
@@ -156,31 +167,45 @@ func requireAdminUser() error {
 	return nil
 }
 
-func copyExecutable(source, destination string) error {
-	input, err := os.Open(source)
+func (m Manager) requireAdmin() error {
+	if m.RequireAdmin != nil {
+		return m.RequireAdmin()
+	}
+	return requireAdminUser()
+}
+
+func (m Manager) runner() Runner {
+	if m.Runner != nil {
+		return m.Runner
+	}
+	return execRunner{}
+}
+
+func validateApp(path string) error {
+	info, err := os.Stat(path)
 	if err != nil {
-		return fmt.Errorf("open current executable: %w", err)
+		return fmt.Errorf("ChatGPT Desktop is not installed at %s: %w", path, err)
 	}
-	defer func() { _ = input.Close() }()
-	temporary, err := os.CreateTemp(filepath.Dir(destination), ".codex-autoupdate-install-")
+	if !info.IsDir() {
+		return fmt.Errorf("ChatGPT Desktop path is not an application bundle directory: %s", path)
+	}
+	return nil
+}
+
+func validateCanonicalExecutable(actual, expected string) error {
+	actualInfo, err := os.Stat(actual)
 	if err != nil {
-		return fmt.Errorf("create installed executable: %w", err)
+		return fmt.Errorf("inspect current executable: %w", err)
 	}
-	temporaryPath := temporary.Name()
-	defer func() { _ = os.Remove(temporaryPath) }()
-	if _, err := io.Copy(temporary, input); err != nil {
-		_ = temporary.Close()
-		return fmt.Errorf("copy installed executable: %w", err)
+	expectedInfo, err := os.Stat(expected)
+	if err != nil {
+		return fmt.Errorf("codex-autoupdate must be installed at %s; follow https://github.com/tylergannon/codex-autoupdate/blob/main/llms.txt: %w", expected, err)
 	}
-	if err := temporary.Chmod(0o755); err != nil {
-		_ = temporary.Close()
-		return fmt.Errorf("make installed executable runnable: %w", err)
+	if !os.SameFile(actualInfo, expectedInfo) {
+		return fmt.Errorf("codex-autoupdate is running from %s, but the LaunchAgent requires %s; follow https://github.com/tylergannon/codex-autoupdate/blob/main/llms.txt", actual, expected)
 	}
-	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("finish installed executable: %w", err)
-	}
-	if err := os.Rename(temporaryPath, destination); err != nil {
-		return fmt.Errorf("activate installed executable: %w", err)
+	if !actualInfo.Mode().IsRegular() || actualInfo.Mode().Perm()&0o111 == 0 {
+		return fmt.Errorf("installed executable is not a runnable regular file: %s", expected)
 	}
 	return nil
 }
