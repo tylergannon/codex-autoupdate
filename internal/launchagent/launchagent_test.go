@@ -2,6 +2,7 @@ package launchagent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -37,7 +38,7 @@ func TestRenderPlistPreservesArgumentsAndEscapesXML(t *testing.T) {
 func TestManagerInstallRefreshStatusAndUninstall(t *testing.T) {
 	t.Parallel()
 	home := t.TempDir()
-	runner := &recordingRunner{status: "service = running\n"}
+	runner := &recordingRunner{status: "service = running\n", bootstrapFailures: 1}
 	manager := Manager{
 		HomeDir:      home,
 		UID:          501,
@@ -77,6 +78,7 @@ func TestManagerInstallRefreshStatusAndUninstall(t *testing.T) {
 	wantCommands := []string{
 		"/bin/launchctl bootout gui/501/" + Label,
 		"/bin/launchctl bootstrap gui/501 " + paths.plist,
+		"/bin/launchctl bootstrap gui/501 " + paths.plist,
 		"/bin/launchctl kickstart gui/501/" + Label,
 	}
 	if !slices.Equal(runner.commands, wantCommands) {
@@ -85,7 +87,11 @@ func TestManagerInstallRefreshStatusAndUninstall(t *testing.T) {
 	if err := manager.Install(context.Background(), config); err != nil {
 		t.Fatalf("refresh install: %v", err)
 	}
-	wantCommands = append(wantCommands, wantCommands...)
+	wantCommands = append(wantCommands,
+		"/bin/launchctl bootout gui/501/"+Label,
+		"/bin/launchctl bootstrap gui/501 "+paths.plist,
+		"/bin/launchctl kickstart gui/501/"+Label,
+	)
 	if !slices.Equal(runner.commands, wantCommands) {
 		t.Fatalf("refresh commands = %v, want %v", runner.commands, wantCommands)
 	}
@@ -155,12 +161,17 @@ func TestManagerInstallRejectsNoncanonicalExecutableAndMissingApp(t *testing.T) 
 }
 
 type recordingRunner struct {
-	commands []string
-	status   string
+	commands          []string
+	status            string
+	bootstrapFailures int
 }
 
 func (r *recordingRunner) CombinedOutput(_ context.Context, name string, args ...string) ([]byte, error) {
 	r.commands = append(r.commands, strings.Join(append([]string{name}, args...), " "))
+	if slices.Contains(args, "bootstrap") && r.bootstrapFailures > 0 {
+		r.bootstrapFailures--
+		return []byte("Bootstrap failed: 5: Input/output error"), errors.New("exit status 5")
+	}
 	if slices.Contains(args, "print") {
 		return []byte(r.status), nil
 	}
