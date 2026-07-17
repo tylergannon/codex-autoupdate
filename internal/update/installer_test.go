@@ -37,6 +37,10 @@ func TestPrepareDownloadsExtractsVerifiesAndStages(t *testing.T) {
 	}))
 	defer server.Close()
 	runner := &fixtureRunner{appPath: appPath}
+	staleStage := filepath.Join(root, ".ChatGPT.app.codex-autoupdate-1.new")
+	staleFailure := filepath.Join(root, ".ChatGPT.app.codex-autoupdate-failed-1-123")
+	writeFakeBundle(t, staleStage, "1.0", 1)
+	writeFakeBundle(t, staleFailure, "1.0", 1)
 	installer := Installer{
 		AppPath:       appPath,
 		CacheDir:      filepath.Join(root, "cache"),
@@ -55,6 +59,11 @@ func TestPrepareDownloadsExtractsVerifiesAndStages(t *testing.T) {
 	}
 	if build := readBuild(t, prepared.StagedPath); build != "2" {
 		t.Fatalf("staged build %s, want 2", build)
+	}
+	for _, residue := range []string{staleStage, staleFailure} {
+		if _, err := os.Stat(residue); !os.IsNotExist(err) {
+			t.Fatalf("residue was not removed: %s", residue)
+		}
 	}
 }
 
@@ -105,6 +114,52 @@ func TestApplyRestoresOldBundleWhenReplacementDoesNotStart(t *testing.T) {
 	}
 	if build := readBuild(t, appPath); build != "1" {
 		t.Fatalf("installed build %s after rollback, want 1", build)
+	}
+	marker := installer.failurePath(2)
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("failure marker missing: %v", err)
+	}
+	failedBundles, err := filepath.Glob(filepath.Join(root, ".ChatGPT.app.codex-autoupdate-failed-*"))
+	if err != nil || len(failedBundles) != 0 {
+		t.Fatalf("failed replacement was not cleaned up: %v, %v", failedBundles, err)
+	}
+	if _, err := installer.Prepare(context.Background(), appcast.Release{Build: 2, Version: "2.0"}); err == nil || !strings.Contains(err.Error(), "quarantined") {
+		t.Fatalf("expected build quarantine on retry, got %v", err)
+	}
+	if err := os.Remove(marker); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := installer.Prepare(context.Background(), appcast.Release{Build: 2, Version: "2.0"}); err == nil || strings.Contains(err.Error(), "quarantined") {
+		t.Fatalf("expected deliberate marker removal to permit retry, got %v", err)
+	}
+}
+
+func TestApplyRelaunchesPreviousAppWhenActivationRenameFails(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	appPath := filepath.Join(root, "ChatGPT.app")
+	stagedPath := filepath.Join(root, ".ChatGPT.app.codex-autoupdate-2.new")
+	writeFakeBundle(t, appPath, "1.0", 1)
+	writeFakeBundle(t, stagedPath, "2.0", 2)
+	runner := &fixtureRunner{appPath: appPath, launched: true}
+	installer := Installer{AppPath: appPath, CacheDir: filepath.Join(root, "cache"), QuitTimeout: time.Second, LaunchTimeout: time.Second, Runner: runner}
+	err := installer.Apply(context.Background(), Prepared{Release: appcast.Release{Build: 2, Version: "2.0"}, StagedPath: stagedPath}, func(context.Context) error {
+		return os.RemoveAll(stagedPath)
+	})
+	if err == nil || !strings.Contains(err.Error(), "previous app relaunched") {
+		t.Fatalf("expected relaunch after activation failure, got %v", err)
+	}
+	if build := readBuild(t, appPath); build != "1" {
+		t.Fatalf("installed build %s after failed activation, want 1", build)
+	}
+	runner.mu.Lock()
+	launched := runner.launched
+	runner.mu.Unlock()
+	if !launched {
+		t.Fatal("previous app was not relaunched")
+	}
+	if _, err := os.Stat(installer.failurePath(2)); err != nil {
+		t.Fatalf("activation failure marker missing: %v", err)
 	}
 }
 

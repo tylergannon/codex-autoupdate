@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
@@ -27,8 +28,9 @@ type Release struct {
 }
 
 type Client struct {
-	HTTPClient *http.Client
-	FeedURL    string
+	HTTPClient  *http.Client
+	FeedURL     string
+	HostVersion string
 }
 
 func (c Client) Latest(ctx context.Context) (Release, error) {
@@ -67,6 +69,17 @@ func (c Client) Latest(ctx context.Context) (Release, error) {
 		return Release{}, fmt.Errorf("decode appcast: %w", err)
 	}
 
+	hostVersion := strings.TrimSpace(c.HostVersion)
+	if hostVersion == "" {
+		output, err := exec.CommandContext(ctx, "/usr/bin/sw_vers", "-productVersion").CombinedOutput()
+		if err != nil {
+			return Release{}, fmt.Errorf("read host macOS version: %w: %s", err, strings.TrimSpace(string(output)))
+		}
+		hostVersion = strings.TrimSpace(string(output))
+	}
+	if !isNumericVersion(hostVersion) {
+		return Release{}, fmt.Errorf("invalid host macOS version %q", hostVersion)
+	}
 	var latest Release
 	for _, item := range feed.Channel.Items {
 		release, err := item.release()
@@ -76,6 +89,11 @@ func (c Client) Latest(ctx context.Context) (Release, error) {
 		if release.Architecture != "" && release.Architecture != runtime.GOARCH {
 			continue
 		}
+		if release.MinimumSystem != "" {
+			if !isNumericVersion(release.MinimumSystem) || compareNumericVersions(hostVersion, release.MinimumSystem) < 0 {
+				continue
+			}
+		}
 		if release.Build > latest.Build {
 			latest = release
 		}
@@ -84,6 +102,41 @@ func (c Client) Latest(ctx context.Context) (Release, error) {
 		return Release{}, fmt.Errorf("appcast contains no compatible %s release", runtime.GOARCH)
 	}
 	return latest, nil
+}
+
+func compareNumericVersions(left, right string) int {
+	leftParts := strings.Split(left, ".")
+	rightParts := strings.Split(right, ".")
+	length := max(len(leftParts), len(rightParts))
+	for index := range length {
+		var leftValue, rightValue int64
+		if index < len(leftParts) {
+			leftValue, _ = strconv.ParseInt(leftParts[index], 10, 64)
+		}
+		if index < len(rightParts) {
+			rightValue, _ = strconv.ParseInt(rightParts[index], 10, 64)
+		}
+		if leftValue < rightValue {
+			return -1
+		}
+		if leftValue > rightValue {
+			return 1
+		}
+	}
+	return 0
+}
+
+func isNumericVersion(value string) bool {
+	parts := strings.SplitSeq(value, ".")
+	for part := range parts {
+		if part == "" {
+			return false
+		}
+		if _, err := strconv.ParseInt(part, 10, 64); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 type rss struct {

@@ -51,6 +51,6 @@ Remove it with:
 - `task_started`, `task_complete`, and `turn_aborted` records from `Codex Desktop` rollouts define task activity. The detector is scoped to the current Desktop app-server process lifetime so a task abandoned by an older crash cannot block updates forever.
 - Activity is checked again immediately before shutdown. No public cross-process lock exists to close the final millisecond-scale race completely.
 - The app is asked to quit normally. If it does not exit before the timeout, no replacement happens and no process is force-killed.
-- The prior signed app bundle is retained until the replacement app-server becomes ready. A failed replacement is moved aside and the prior app is restored and relaunched.
+- The prior signed app bundle is retained until the replacement app-server becomes ready. A failed replacement is removed after the prior app is restored and relaunched. That failed build is quarantined in `~/Library/Caches/codex-autoupdate/failed-build-BUILD.json`; the watcher will automatically try a later build but will not repeatedly restart for the same bad release.
 
 For one foreground check/update cycle, use `./codex-autoupdate run --once`. The executable human restart proof is documented in [`ephemeral/projects/codex-autoupdate/human-proof.md`](ephemeral/projects/codex-autoupdate/human-proof.md).

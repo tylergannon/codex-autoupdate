@@ -2,6 +2,7 @@ package activity
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -24,6 +25,7 @@ type Report struct {
 	AppServerStart time.Time
 	ActiveThreads  []string
 	LastLifecycle  time.Time
+	Warnings       []string
 }
 
 func (r Report) Active() bool {
@@ -105,6 +107,9 @@ func (d *Detector) Detect(ctx context.Context) (Report, error) {
 			if state.originator != desktopOriginator || state.lastLifecycle.Before(cutoff) {
 				return nil
 			}
+			if state.corruptRecords > 0 {
+				report.Warnings = append(report.Warnings, fmt.Sprintf("%s contains %d undecodable complete JSONL record(s)", path, state.corruptRecords))
+			}
 			if state.lastLifecycle.After(report.LastLifecycle) {
 				report.LastLifecycle = state.lastLifecycle
 			}
@@ -122,10 +127,11 @@ func (d *Detector) Detect(ctx context.Context) (Report, error) {
 }
 
 type rolloutState struct {
-	originator    string
-	threadID      string
-	active        bool
-	lastLifecycle time.Time
+	originator     string
+	threadID       string
+	active         bool
+	lastLifecycle  time.Time
+	corruptRecords int
 }
 
 type rolloutRecord struct {
@@ -161,18 +167,26 @@ func readRollout(path string) (rolloutState, error) {
 		if len(line) == 0 && readErr == io.EOF {
 			break
 		}
+		if len(bytes.TrimSpace(line)) == 0 {
+			if readErr != nil {
+				break
+			}
+			continue
+		}
 		var record rolloutRecord
 		if err := json.Unmarshal(line, &record); err != nil {
 			if readErr == io.EOF {
 				break
 			}
-			return rolloutState{}, fmt.Errorf("decode JSONL record: %w", err)
+			state.corruptRecords++
+			continue
 		}
 		switch record.Type {
 		case "session_meta":
 			var meta sessionMeta
 			if err := json.Unmarshal(record.Payload, &meta); err != nil {
-				return rolloutState{}, fmt.Errorf("decode session metadata: %w", err)
+				state.corruptRecords++
+				continue
 			}
 			if meta.Originator != "" {
 				state.originator = meta.Originator
@@ -185,7 +199,8 @@ func readRollout(path string) (rolloutState, error) {
 		case "event_msg":
 			var event eventMessage
 			if err := json.Unmarshal(record.Payload, &event); err != nil {
-				return rolloutState{}, fmt.Errorf("decode event message: %w", err)
+				state.corruptRecords++
+				continue
 			}
 			switch event.Type {
 			case "task_started":

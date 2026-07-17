@@ -9,3 +9,7 @@ decision: Cache parsed rollout state by app-server PID, file size, and modificat
 decision: Treat both task_complete and turn_aborted as terminal lifecycle events; interrupted turns do not always emit task_complete before the next turn.
 decision: Never force-kill ChatGPT Desktop. A quit timeout aborts the update; a replacement readiness failure restores and relaunches the verified prior bundle.
 decision: The real restart proof must run from Terminal against a naturally newer stable appcast build, exercise two deliberate task interruptions of the idle countdown, and retain before/after JSON, watcher logs, signature checks, PIDs, and human UI observations.
+review: Claude Fable round 01 identified repeated bad-build retries and bundle residue, missing minimum-system filtering, brittle corrupt-record handling, post-quit relaunch gaps, and direct context cancellation comparison.
+decision: Quarantine a failed activation by build in the user cache, remove failed/stale application bundles, and permit either a later release or deliberate marker deletion; this bounds both interruption frequency and disk growth.
+decision: Verify the installed bundle before requesting quit and relaunch it after every recoverable post-quit activation failure.
+decision: Skip malformed complete rollout records with a surfaced warning while preserving any previously observed task_started state as active until a valid terminal event appears.

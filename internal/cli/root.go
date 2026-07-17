@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -99,7 +100,7 @@ func newRunCommand(config *settings) *cobra.Command {
 			}()
 			watcher := config.watcher(logger)
 			err = watcher.Run(command.Context(), once)
-			if err == context.Canceled {
+			if errors.Is(err, context.Canceled) {
 				return nil
 			}
 			return err
@@ -245,7 +246,7 @@ func (s settings) watcher(logger *slog.Logger) watch.Watcher {
 		Feed:                 feed,
 		Activity:             &detector,
 		Inspector:            inspector,
-		Installer:            installer,
+		Installer:            &installer,
 		Logger:               logger,
 	}
 }

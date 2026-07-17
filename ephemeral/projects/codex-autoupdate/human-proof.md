@@ -53,4 +53,4 @@ The human additionally verifies that the two deliberate tasks reset the idle win
 
 ## Failure handling
 
-If the updated app does not become ready, the watcher is expected to restore and relaunch the prior bundle and exit nonzero. Preserve the proof directory, the hidden `/Applications/.ChatGPT.app.codex-autoupdate-failed-*` sibling reported in the log, and `~/Library/Logs/com.openai.codex/` for diagnosis. Do not rerun until the failure is understood.
+If the updated app does not become ready, the watcher is expected to restore and relaunch the prior bundle, write `~/Library/Caches/codex-autoupdate/failed-build-BUILD.json`, and exit nonzero. Preserve the proof directory, that small quarantine marker, and `~/Library/Logs/com.openai.codex/` for diagnosis. The same build will not be attempted again unless the marker is deliberately removed; a later build remains eligible automatically.

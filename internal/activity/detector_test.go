@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,6 +36,28 @@ func TestDetectorReportsOnlyActiveDesktopRolloutsSinceServerStart(t *testing.T) 
 		t.Fatal(err)
 	}
 	writeRollout(t, home, "partial", "Codex Desktop", []lifecycle{{"task_started", activeStart.Add(4 * time.Minute)}, {"task_complete", activeStart.Add(5 * time.Minute)}}, true)
+	corrupt := writeRollout(t, home, "corrupt", "Codex Desktop", []lifecycle{{"task_started", activeStart}, {"task_complete", activeStart.Add(time.Minute)}}, false)
+	file, err := os.OpenFile(corrupt, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString("not-json\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	corruptActive := writeRollout(t, home, "corrupt-active", "Codex Desktop", []lifecycle{{"task_started", activeStart.Add(6 * time.Minute)}}, false)
+	file, err = os.OpenFile(corruptActive, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString("not-json\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	detector := Detector{
 		AppPath:   "/Applications/ChatGPT.app",
@@ -45,11 +68,14 @@ func TestDetectorReportsOnlyActiveDesktopRolloutsSinceServerStart(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(report.ActiveThreads, []string{"active"}) {
+	if !slices.Equal(report.ActiveThreads, []string{"active", "corrupt-active"}) {
 		t.Fatalf("unexpected active threads: %v", report.ActiveThreads)
 	}
-	if !report.LastLifecycle.Equal(activeStart.Add(5 * time.Minute)) {
+	if !report.LastLifecycle.Equal(activeStart.Add(6 * time.Minute)) {
 		t.Fatalf("unexpected last lifecycle: %s", report.LastLifecycle)
+	}
+	if len(report.Warnings) != 2 || !strings.Contains(strings.Join(report.Warnings, "\n"), "corrupt-active") {
+		t.Fatalf("unexpected warnings: %v", report.Warnings)
 	}
 }
 
@@ -86,6 +112,7 @@ func writeRollout(t *testing.T, home, id, originator string, events []lifecycle,
 	for _, event := range events {
 		_, _ = fmt.Fprintf(file, "{\"timestamp\":\"%s\",\"type\":\"event_msg\",\"payload\":{\"type\":\"%s\"}}\n", event.at.Format(time.RFC3339Nano), event.event)
 	}
+	_, _ = file.WriteString("\n")
 	if partial {
 		_, _ = file.WriteString(`{"timestamp":"unterminated`)
 	}

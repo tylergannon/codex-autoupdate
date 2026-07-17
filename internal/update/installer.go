@@ -2,6 +2,7 @@ package update
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tylergannon/codex-autoupdate/internal/appcast"
@@ -31,9 +33,19 @@ type Installer struct {
 	Inspector     macos.Inspector
 	Processes     macos.ProcessFinder
 	Logger        *slog.Logger
+
+	mu      sync.Mutex
+	blocked map[int64]string
 }
 
-func (i Installer) Prepare(ctx context.Context, release appcast.Release) (Prepared, error) {
+type failureRecord struct {
+	Build    int64     `json:"build"`
+	Version  string    `json:"version"`
+	FailedAt time.Time `json:"failed_at"`
+	Error    string    `json:"error"`
+}
+
+func (i *Installer) Prepare(ctx context.Context, release appcast.Release) (Prepared, error) {
 	if err := i.validate(); err != nil {
 		return Prepared{}, err
 	}
@@ -41,6 +53,15 @@ func (i Installer) Prepare(ctx context.Context, release appcast.Release) (Prepar
 		return Prepared{}, fmt.Errorf("create cache directory: %w", err)
 	}
 	stagedPath := i.stagedPath(release.Build)
+	if reason, blocked := i.failureReason(release.Build); blocked {
+		if err := i.cleanupResidue(""); err != nil {
+			return Prepared{}, err
+		}
+		return Prepared{}, fmt.Errorf("build %d is quarantined after a failed activation (%s); a newer build will be tried automatically, or remove %s to retry", release.Build, reason, i.failurePath(release.Build))
+	}
+	if err := i.cleanupResidue(stagedPath); err != nil {
+		return Prepared{}, err
+	}
 	if bundle, err := i.inspector().Inspect(ctx, stagedPath, true); err == nil {
 		if err := matchesRelease(bundle, release); err == nil {
 			i.logger().Info("reusing verified staged update", "build", release.Build, "path", stagedPath)
@@ -92,7 +113,7 @@ func (i Installer) Prepare(ctx context.Context, release appcast.Release) (Prepar
 	return Prepared{Release: release, StagedPath: stagedPath}, nil
 }
 
-func (i Installer) Apply(ctx context.Context, prepared Prepared, preflight func(context.Context) error) error {
+func (i *Installer) Apply(ctx context.Context, prepared Prepared, preflight func(context.Context) error) error {
 	if err := i.validate(); err != nil {
 		return err
 	}
@@ -102,6 +123,10 @@ func (i Installer) Apply(ctx context.Context, prepared Prepared, preflight func(
 	}
 	if err := matchesRelease(bundle, prepared.Release); err != nil {
 		return err
+	}
+	current, err := i.inspector().Inspect(ctx, i.AppPath, true)
+	if err != nil {
+		return fmt.Errorf("verify installed app before replacement: %w", err)
 	}
 	if preflight != nil {
 		if err := preflight(ctx); err != nil {
@@ -117,31 +142,27 @@ func (i Installer) Apply(ctx context.Context, prepared Prepared, preflight func(
 		i.logger().Info("requesting graceful ChatGPT Desktop shutdown", "processes", len(processes))
 		output, quitErr := i.runner().CombinedOutput(ctx, "/usr/bin/osascript", "-e", `tell application id "com.openai.codex" to quit`)
 		if quitErr != nil {
-			return commandError("request ChatGPT Desktop quit", output, quitErr)
+			return i.relaunchPrevious(ctx, current, commandError("request ChatGPT Desktop quit", output, quitErr))
 		}
 		if err := i.waitForExit(ctx); err != nil {
 			return err
 		}
 	}
 
-	current, err := i.inspector().Inspect(ctx, i.AppPath, true)
-	if err != nil {
-		return fmt.Errorf("verify installed app before replacement: %w", err)
-	}
 	backupPath := filepath.Join(filepath.Dir(i.AppPath), fmt.Sprintf(".%s.codex-autoupdate-backup-%d-%d", filepath.Base(i.AppPath), current.Build, time.Now().UnixNano()))
 	if err := os.Rename(i.AppPath, backupPath); err != nil {
-		return fmt.Errorf("move installed app to rollback path: %w", err)
+		return i.abortActivation(ctx, prepared, current, fmt.Errorf("move installed app to rollback path: %w", err))
 	}
 	if err := os.Rename(prepared.StagedPath, i.AppPath); err != nil {
 		restoreErr := os.Rename(backupPath, i.AppPath)
 		if restoreErr != nil {
 			return fmt.Errorf("activate staged app: %w (rollback also failed: %v)", err, restoreErr)
 		}
-		return fmt.Errorf("activate staged app: %w", err)
+		return i.abortActivation(ctx, prepared, current, fmt.Errorf("activate staged app: %w", err))
 	}
 
 	if err := i.launchAndWait(ctx, prepared.Release.Build); err != nil {
-		return i.rollback(ctx, backupPath, prepared, err)
+		return i.rollback(ctx, backupPath, prepared, current, err)
 	}
 	if err := removeExact(backupPath, filepath.Dir(i.AppPath)); err != nil {
 		i.logger().Warn("updated app is running but rollback bundle could not be removed", "path", backupPath, "error", err)
@@ -150,7 +171,7 @@ func (i Installer) Apply(ctx context.Context, prepared Prepared, preflight func(
 	return nil
 }
 
-func (i Installer) download(ctx context.Context, release appcast.Release, archivePath string) error {
+func (i *Installer) download(ctx context.Context, release appcast.Release, archivePath string) error {
 	if info, err := os.Stat(archivePath); err == nil && info.Size() == release.Length {
 		return nil
 	}
@@ -202,7 +223,7 @@ func (i Installer) download(ctx context.Context, release appcast.Release, archiv
 	return nil
 }
 
-func (i Installer) waitForExit(ctx context.Context) error {
+func (i *Installer) waitForExit(ctx context.Context) error {
 	deadline := time.Now().Add(i.QuitTimeout)
 	for {
 		processes, err := i.processes().BundleProcesses(ctx, i.AppPath)
@@ -221,7 +242,7 @@ func (i Installer) waitForExit(ctx context.Context) error {
 	}
 }
 
-func (i Installer) launchAndWait(ctx context.Context, expectedBuild int64) error {
+func (i *Installer) launchAndWait(ctx context.Context, expectedBuild int64) error {
 	output, err := i.runner().CombinedOutput(ctx, "/usr/bin/open", i.AppPath)
 	if err != nil {
 		return commandError("launch updated ChatGPT Desktop", output, err)
@@ -247,7 +268,7 @@ func (i Installer) launchAndWait(ctx context.Context, expectedBuild int64) error
 	}
 }
 
-func (i Installer) rollback(ctx context.Context, backupPath string, prepared Prepared, cause error) error {
+func (i *Installer) rollback(ctx context.Context, backupPath string, prepared Prepared, previous macos.Bundle, cause error) error {
 	i.logger().Error("updated app failed readiness check; rolling back", "error", cause)
 	if processes, err := i.processes().BundleProcesses(ctx, i.AppPath); err == nil && len(processes) > 0 {
 		_, _ = i.runner().CombinedOutput(ctx, "/usr/bin/osascript", "-e", `tell application id "com.openai.codex" to quit`)
@@ -260,13 +281,132 @@ func (i Installer) rollback(ctx context.Context, backupPath string, prepared Pre
 	if err := os.Rename(backupPath, i.AppPath); err != nil {
 		return fmt.Errorf("%w; rollback could not restore previous app: %v", cause, err)
 	}
-	if output, err := i.runner().CombinedOutput(ctx, "/usr/bin/open", i.AppPath); err != nil {
-		return fmt.Errorf("%w; previous app was restored but relaunch failed: %s", cause, strings.TrimSpace(string(output)))
+	markerErr := i.markFailure(prepared.Release, cause)
+	cleanupErr := removeExact(failedPath, filepath.Dir(i.AppPath))
+	relaunchErr := i.launchAndWait(ctx, previous.Build)
+	result := fmt.Errorf("%w; previous app restored and build %d quarantined", cause, prepared.Release.Build)
+	if markerErr != nil {
+		result = fmt.Errorf("%w; could not persist quarantine marker: %v", result, markerErr)
 	}
-	return fmt.Errorf("%w; previous app restored, failed replacement retained at %s", cause, failedPath)
+	if cleanupErr != nil {
+		result = fmt.Errorf("%w; could not remove failed replacement %s: %v", result, failedPath, cleanupErr)
+	}
+	if relaunchErr != nil {
+		result = fmt.Errorf("%w; previous app relaunch did not become ready: %v", result, relaunchErr)
+	}
+	return result
 }
 
-func (i Installer) validate() error {
+func (i *Installer) relaunchPrevious(ctx context.Context, previous macos.Bundle, cause error) error {
+	if err := i.launchAndWait(ctx, previous.Build); err != nil {
+		return fmt.Errorf("%w; previous app relaunch did not become ready: %v", cause, err)
+	}
+	return fmt.Errorf("%w; previous app relaunched", cause)
+}
+
+func (i *Installer) abortActivation(ctx context.Context, prepared Prepared, previous macos.Bundle, cause error) error {
+	markerErr := i.markFailure(prepared.Release, cause)
+	cleanupErr := removeExact(prepared.StagedPath, filepath.Dir(i.AppPath))
+	result := i.relaunchPrevious(ctx, previous, cause)
+	result = fmt.Errorf("%w; build %d quarantined", result, prepared.Release.Build)
+	if markerErr != nil {
+		result = fmt.Errorf("%w; could not persist quarantine marker: %v", result, markerErr)
+	}
+	if cleanupErr != nil {
+		result = fmt.Errorf("%w; could not remove staged replacement: %v", result, cleanupErr)
+	}
+	return result
+}
+
+func (i *Installer) markFailure(release appcast.Release, cause error) error {
+	record := failureRecord{Build: release.Build, Version: release.Version, FailedAt: time.Now().UTC(), Error: cause.Error()}
+	i.rememberFailure(release.Build, record.Error)
+
+	finish := func(err error) error {
+		if err != nil {
+			return err
+		}
+		i.mu.Lock()
+		delete(i.blocked, release.Build)
+		i.mu.Unlock()
+		return nil
+	}
+
+	if err := os.MkdirAll(i.CacheDir, 0o700); err != nil {
+		return finish(fmt.Errorf("create cache directory for failure marker: %w", err))
+	}
+	data, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return finish(fmt.Errorf("encode failure marker: %w", err))
+	}
+	temporaryPath := i.failurePath(release.Build) + ".partial-" + strconv.Itoa(os.Getpid())
+	if err := os.WriteFile(temporaryPath, append(data, '\n'), 0o600); err != nil {
+		return finish(fmt.Errorf("write failure marker: %w", err))
+	}
+	if err := os.Rename(temporaryPath, i.failurePath(release.Build)); err != nil {
+		_ = os.Remove(temporaryPath)
+		return finish(fmt.Errorf("finish failure marker: %w", err))
+	}
+	return finish(nil)
+}
+
+func (i *Installer) rememberFailure(build int64, reason string) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.blocked == nil {
+		i.blocked = make(map[int64]string)
+	}
+	i.blocked[build] = reason
+}
+
+func (i *Installer) failureReason(build int64) (string, bool) {
+	data, err := os.ReadFile(i.failurePath(build))
+	if err == nil {
+		var record failureRecord
+		if err := json.Unmarshal(data, &record); err != nil {
+			return "unreadable failure marker", true
+		}
+		return record.Error, true
+	}
+	if !os.IsNotExist(err) {
+		return fmt.Sprintf("failure marker cannot be read: %v", err), true
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if reason, ok := i.blocked[build]; ok {
+		return reason, true
+	}
+	return "", false
+}
+
+func (i *Installer) cleanupResidue(keepStagedPath string) error {
+	parent := filepath.Dir(i.AppPath)
+	patterns := []string{
+		filepath.Join(parent, "."+filepath.Base(i.AppPath)+".codex-autoupdate-*.new"),
+		filepath.Join(parent, "."+filepath.Base(i.AppPath)+".codex-autoupdate-failed-*"),
+	}
+	for _, pattern := range patterns {
+		matches, err := filepath.Glob(pattern)
+		if err != nil {
+			return fmt.Errorf("find update residue: %w", err)
+		}
+		for _, path := range matches {
+			if path == keepStagedPath {
+				continue
+			}
+			if err := removeExact(path, parent); err != nil {
+				return fmt.Errorf("remove update residue %s: %w", path, err)
+			}
+		}
+	}
+	return nil
+}
+
+func (i *Installer) failurePath(build int64) string {
+	return filepath.Join(i.CacheDir, fmt.Sprintf("failed-build-%d.json", build))
+}
+
+func (i *Installer) validate() error {
 	if !filepath.IsAbs(i.AppPath) || filepath.Base(i.AppPath) != "ChatGPT.app" {
 		return fmt.Errorf("app path must be an absolute path ending in ChatGPT.app")
 	}
@@ -286,32 +426,32 @@ func (i Installer) validate() error {
 	return nil
 }
 
-func (i Installer) stagedPath(build int64) string {
+func (i *Installer) stagedPath(build int64) string {
 	return filepath.Join(filepath.Dir(i.AppPath), fmt.Sprintf(".%s.codex-autoupdate-%d.new", filepath.Base(i.AppPath), build))
 }
 
-func (i Installer) runner() macos.Runner {
+func (i *Installer) runner() macos.Runner {
 	if i.Runner != nil {
 		return i.Runner
 	}
 	return macos.ExecRunner{}
 }
 
-func (i Installer) inspector() macos.Inspector {
+func (i *Installer) inspector() macos.Inspector {
 	if i.Inspector.Runner != nil {
 		return i.Inspector
 	}
 	return macos.Inspector{Runner: i.runner()}
 }
 
-func (i Installer) processes() macos.ProcessFinder {
+func (i *Installer) processes() macos.ProcessFinder {
 	if i.Processes.Runner != nil {
 		return i.Processes
 	}
 	return macos.ProcessFinder{Runner: i.runner()}
 }
 
-func (i Installer) logger() *slog.Logger {
+func (i *Installer) logger() *slog.Logger {
 	if i.Logger != nil {
 		return i.Logger
 	}

@@ -97,6 +97,7 @@ func (w Watcher) cycle(ctx context.Context) (bool, error) {
 		if err != nil {
 			return err
 		}
+		w.logWarnings(report)
 		if report.Active() {
 			return fmt.Errorf("desktop task became active: %v", report.ActiveThreads)
 		}
@@ -118,6 +119,7 @@ func (w Watcher) waitForIdle(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("inspect Desktop task activity: %w", err)
 		}
+		w.logWarnings(report)
 		if report.Active() {
 			active := fmt.Sprint(report.ActiveThreads)
 			if active != lastLoggedActive {
@@ -143,6 +145,12 @@ func (w Watcher) waitForIdle(ctx context.Context) error {
 		if err := w.sleep(ctx, w.ActivityPollInterval); err != nil {
 			return err
 		}
+	}
+}
+
+func (w Watcher) logWarnings(report activity.Report) {
+	for _, warning := range report.Warnings {
+		w.logger().Warn("Desktop activity record was skipped", "warning", warning)
 	}
 }
 
