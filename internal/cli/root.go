@@ -157,7 +157,7 @@ func newCheckCommand(config *settings) *cobra.Command {
 func newInstallCommand(config *settings) *cobra.Command {
 	return &cobra.Command{
 		Use:   "install",
-		Short: "Install and start the per-user LaunchAgent",
+		Short: "Register and start the installed per-user LaunchAgent",
 		RunE: func(command *cobra.Command, _ []string) error {
 			if err := config.validate(); err != nil {
 				return err
@@ -186,7 +186,7 @@ func newInstallCommand(config *settings) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintln(command.OutOrStdout(), "installed and started "+launchagent.Label)
+			_, err = fmt.Fprintln(command.OutOrStdout(), "registered and started "+launchagent.Label)
 			return err
 		},
 	}
@@ -200,7 +200,7 @@ func newUninstallCommand() *cobra.Command {
 			if err := (launchagent.Manager{}).Uninstall(command.Context()); err != nil {
 				return err
 			}
-			_, err := fmt.Fprintln(command.OutOrStdout(), "uninstalled "+launchagent.Label)
+			_, err := fmt.Fprintln(command.OutOrStdout(), "uninstalled "+launchagent.Label+"; logs and cache retained")
 			return err
 		},
 	}

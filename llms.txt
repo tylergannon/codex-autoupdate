@@ -1,78 +1,56 @@
-# codex-autoupdate installation and use
+# Install and operate codex-autoupdate
 
-Install this project only on macOS for the currently logged-in user. It manages `/Applications/ChatGPT.app`, so first verify that ChatGPT Desktop is installed and that the user is an administrator with write access to `/Applications`.
+Act as the installer. Perform the installation and verify it; do not ask the user to choose a Go binary directory or manually register launchd.
 
-## Install the official release
+This software is for macOS. It requires Go, a logged-in administrator account, and ChatGPT Desktop. It installs one binary at `~/Library/Application Support/codex-autoupdate/codex-autoupdate` and registers the per-user LaunchAgent `com.tylergannon.codex-autoupdate`. It never uses `sudo`.
 
-1. Verify the prerequisites:
+## Install or upgrade
 
-   ```sh
-   test "$(uname -s)" = Darwin
-   test -d /Applications/ChatGPT.app
-   id -Gn | tr ' ' '\n' | grep -qx admin
-   command -v go
-   ```
-
-2. Install the versioned command with Go:
-
-   ```sh
-   go install github.com/tylergannon/codex-autoupdate/cmd/codex-autoupdate@v0.1.0
-   ```
-
-3. Resolve the installed binary and retain this shell variable for the remaining commands:
-
-   ```sh
-   binary=$(command -v codex-autoupdate || true)
-   if [ -z "$binary" ]; then
-     go_bin=$(go env GOBIN)
-     if [ -z "$go_bin" ]; then
-       go_bin="$(go env GOPATH)/bin"
-     fi
-     binary="$go_bin/codex-autoupdate"
-   fi
-   test -x "$binary"
-   ```
-
-4. Inspect the current state without changing anything:
-
-   ```sh
-   "$binary" check --json
-   ```
-
-5. Install and start the per-user LaunchAgent:
-
-   ```sh
-   "$binary" install
-   "$binary" status
-   ```
-
-The command copies itself into `~/Library/Application Support/codex-autoupdate/`, writes `~/Library/LaunchAgents/com.tylergannon.codex-autoupdate.plist`, and starts it in the current GUI login session. Logs are under `~/Library/Logs/codex-autoupdate/`.
-
-## Configure
-
-Global options go before the subcommand. Options passed to `install` are persisted in the LaunchAgent. The defaults require five uninterrupted idle minutes and check for updates every fifteen minutes.
+Download the versioned installer, verify its published content hash, inspect it, and run it:
 
 ```sh
-"$binary" \
-  --idle-window 10m \
-  --poll-interval 30m \
-  install
+installer=$(mktemp)
+trap 'rm -f "$installer"' EXIT
+curl -fsSL https://raw.githubusercontent.com/tylergannon/codex-autoupdate/v0.1.1/install.sh -o "$installer"
+printf '%s  %s\n' a6789cb1ae3e0d23df6fdd396424178ac031652e1f6223a2695e85f602306331 "$installer" | shasum -a 256 -c -
+sed -n '1,220p' "$installer"
+bash "$installer"
 ```
 
-Useful commands:
+The same procedure upgrades an existing installation in place and refreshes its LaunchAgent.
+
+To change the defaults, pass Cobra's global flags to the installer. For example:
 
 ```sh
-"$binary" check
-"$binary" check --json
-"$binary" run --once
+bash "$installer" --idle-window 10m --poll-interval 30m
+```
+
+The default idle window is five minutes and the default update poll is fifteen minutes. A relocated ChatGPT application is supported with `--app-path /absolute/path/ChatGPT.app`.
+
+## Verify and operate
+
+```sh
+binary="$HOME/Library/Application Support/codex-autoupdate/codex-autoupdate"
+"$binary" --version
 "$binary" status
+"$binary" check --json
+```
+
+`check` is read-only. Logs are written under `~/Library/Logs/codex-autoupdate/`.
+
+Useful foreground and removal commands:
+
+```sh
+"$binary" run --once
 "$binary" uninstall
 ```
 
-## Behavior and recovery
+Uninstall stops the LaunchAgent and removes its plist and canonical binary. Logs, downloads, and failed-build quarantine markers are retained for diagnosis; remove `~/Library/Logs/codex-autoupdate/` and `~/Library/Caches/codex-autoupdate/` separately only when that history is no longer wanted.
 
-The watcher compares `CFBundleVersion` with OpenAI's stable ChatGPT Desktop Sparkle appcast. It stages the full update, verifies the exact build, bundle identifier, OpenAI signing team, strict code signature, Gatekeeper acceptance, and host architecture, then waits until Desktop Codex rollout records show no active task for the configured window. It checks activity again before asking ChatGPT to quit normally. It never force-kills the app.
+## Update behavior and recovery
 
-If the replacement app-server does not become ready, the previous app is restored and relaunched. The failed build is quarantined at `~/Library/Caches/codex-autoupdate/failed-build-BUILD.json`, preventing repeated restarts for that build. A newer build is still eligible. Remove that marker only when deliberately retrying the same build.
+The watcher compares the installed `CFBundleVersion` with OpenAI's stable ChatGPT Desktop Sparkle appcast. It stages the full update, verifies the exact build, bundle identifier, OpenAI signing team, strict code signature, Gatekeeper acceptance, and host architecture, then waits until Desktop Codex rollout records show no active task for the configured window. It checks activity again before asking ChatGPT to quit normally and never force-kills the app.
 
-For a real end-to-end update proof, follow `ephemeral/projects/codex-autoupdate/human-proof.md` from a separate Terminal when OpenAI's appcast advertises a build newer than the installed build.
+If the replacement app-server does not become ready, the previous app is restored and relaunched. The failed build is quarantined at `~/Library/Caches/codex-autoupdate/failed-build-BUILD.json`, preventing repeated restarts for that build. A newer build remains eligible. Remove that marker only when deliberately retrying the same build.
+
+The real end-to-end update proof is documented in `ephemeral/projects/codex-autoupdate/human-proof.md` and must be run from a separate Terminal when OpenAI advertises a build newer than the installed build.
