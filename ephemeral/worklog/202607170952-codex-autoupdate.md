@@ -13,3 +13,4 @@ review: Claude Fable round 01 identified repeated bad-build retries and bundle r
 decision: Quarantine a failed activation by build in the user cache, remove failed/stale application bundles, and permit either a later release or deliberate marker deletion; this bounds both interruption frequency and disk growth.
 decision: Verify the installed bundle before requesting quit and relaunch it after every recoverable post-quit activation failure.
 decision: Skip malformed complete rollout records with a surfaced warning while preserving any previously observed task_started state as active until a valid terminal event appears.
+review: Claude Fable round 02 re-ran the original repros and focused probes, found every material finding fixed, and concluded no material findings. Remaining notes are bounded/documented nitpicks rather than blockers to the human proof.
