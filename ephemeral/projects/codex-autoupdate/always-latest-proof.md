@@ -1,5 +1,7 @@
 # Always-latest installer proof
 
+Proved implementation checkpoint: `cbb9b02` (`fix: always install latest release`).
+
 ## Claims
 
 1. The public bootstrap has no pinned release and no version override; every invocation asks Go for `@latest`.
