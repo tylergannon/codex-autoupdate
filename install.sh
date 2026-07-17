@@ -2,7 +2,6 @@
 set -euo pipefail
 
 readonly module="github.com/tylergannon/codex-autoupdate/cmd/codex-autoupdate"
-readonly default_version="v0.1.1"
 
 die() {
   printf 'codex-autoupdate installer: %s\n' "$*" >&2
@@ -56,10 +55,9 @@ install_for_home() {
   shift
   local install_dir="$home_dir/Library/Application Support/codex-autoupdate"
   local binary="$install_dir/codex-autoupdate"
-  local version=${CODEX_AUTOUPDATE_VERSION:-$default_version}
 
   /bin/mkdir -p "$install_dir"
-  GOBIN="$install_dir" go install "$module@$version"
+  GOBIN="$install_dir" go install "$module@latest"
   [[ -x "$binary" ]] || die "go install did not create $binary"
 
   "$binary" "$@" install
