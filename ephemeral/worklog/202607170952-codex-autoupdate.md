@@ -5,3 +5,6 @@ decision: Observe Desktop task lifecycle from rollout task_started and task_comp
 decision: Stage the full Sparkle enclosure while tasks run, verify the staged OpenAI signature and exact advertised build, then perform a second activity check immediately before graceful quit and atomic replacement.
 friction: go mod download did not populate transitive checksums needed by go tool -> bootstrap repositories with go mod download all before invoking tool directives.
 correction: run lefthook install explicitly inside the task worktree before its first commit, even though the common Git directory already has a hook.
+decision: Cache parsed rollout state by app-server PID, file size, and modification time so five-second activity polling does not repeatedly parse unchanged task histories.
+decision: Treat both task_complete and turn_aborted as terminal lifecycle events; interrupted turns do not always emit task_complete before the next turn.
+decision: Never force-kill ChatGPT Desktop. A quit timeout aborts the update; a replacement readiness failure restores and relaunches the verified prior bundle.
