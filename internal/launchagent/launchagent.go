@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"text/template"
+	"time"
 )
 
 const Label = "com.tylergannon.codex-autoupdate"
@@ -75,13 +76,39 @@ func (m Manager) Install(ctx context.Context, config Config) error {
 	domain := "gui/" + strconv.Itoa(paths.uid)
 	target := domain + "/" + Label
 	_, _ = m.runner().CombinedOutput(ctx, "/bin/launchctl", "bootout", target)
-	if output, err := m.runner().CombinedOutput(ctx, "/bin/launchctl", "bootstrap", domain, paths.plist); err != nil {
-		return commandError("bootstrap LaunchAgent", output, err)
+	if err := m.bootstrap(ctx, domain, paths.plist); err != nil {
+		return err
 	}
 	if output, err := m.runner().CombinedOutput(ctx, "/bin/launchctl", "kickstart", target); err != nil {
 		return commandError("start LaunchAgent", output, err)
 	}
 	return nil
+}
+
+func (m Manager) bootstrap(ctx context.Context, domain, plist string) error {
+	const (
+		retryInterval = 100 * time.Millisecond
+		retryTimeout  = 5 * time.Second
+	)
+	deadline := time.Now().Add(retryTimeout)
+	var output []byte
+	var err error
+	for {
+		output, err = m.runner().CombinedOutput(ctx, "/bin/launchctl", "bootstrap", domain, plist)
+		if err == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return commandError("bootstrap LaunchAgent", output, err)
+		}
+		timer := time.NewTimer(retryInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func (m Manager) Uninstall(ctx context.Context) error {
