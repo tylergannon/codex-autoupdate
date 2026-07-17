@@ -11,13 +11,13 @@ Download the versioned installer, verify its published content hash, inspect it,
 ```sh
 installer=$(mktemp)
 trap 'rm -f "$installer"' EXIT
-curl -fsSL https://raw.githubusercontent.com/tylergannon/codex-autoupdate/v0.1.1/install.sh -o "$installer"
-printf '%s  %s\n' a6789cb1ae3e0d23df6fdd396424178ac031652e1f6223a2695e85f602306331 "$installer" | shasum -a 256 -c -
+curl -fsSL https://raw.githubusercontent.com/tylergannon/codex-autoupdate/main/install.sh -o "$installer"
+printf '%s  %s\n' cf67d72f6816d0f844e6d76b0419cbd585c55be9b6e1ce639025e1d193f41f9e "$installer" | shasum -a 256 -c -
 sed -n '1,220p' "$installer"
 bash "$installer"
 ```
 
-The same procedure upgrades an existing installation in place and refreshes its LaunchAgent.
+The installer unconditionally selects the latest tagged release with `go install github.com/tylergannon/codex-autoupdate/cmd/codex-autoupdate@latest`. It has no version pin or override. The same procedure therefore upgrades an existing installation in place and refreshes its LaunchAgent.
 
 To change the defaults, pass Cobra's global flags to the installer. For example:
 

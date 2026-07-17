@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestInstallScriptInstallsCanonicalBinaryAndForwardsFlags(t *testing.T) {
+func TestInstallScriptAlwaysInstallsLatestAndForwardsFlags(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	content, err := os.ReadFile(filepath.Join("..", "..", "install.sh"))
@@ -48,7 +48,7 @@ printf '%s\n' "$*" >"$INSTALL_TEST_LOG/go.log"
 	writeExecutable(t, fakeInstalled, `#!/bin/bash
 printf '%s\n' "$*" >>"$INSTALL_TEST_LOG/binary.log"
 if [ "$*" = "--version" ]; then
-  printf 'codex-autoupdate version v0.1.1\n'
+  printf 'codex-autoupdate version v9.9.9\n'
 fi
 `)
 
@@ -85,8 +85,11 @@ main --app-path /missing/ChatGPT.app --app-path=%q --idle-window 10m --poll-inte
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(goLog) != "install github.com/tylergannon/codex-autoupdate/cmd/codex-autoupdate@v0.1.1\n" {
+	if string(goLog) != "install github.com/tylergannon/codex-autoupdate/cmd/codex-autoupdate@latest\n" {
 		t.Fatalf("unexpected go invocation: %s", goLog)
+	}
+	if strings.Contains(string(content), "CODEX_AUTOUPDATE_VERSION") {
+		t.Fatal("installer must not expose a version override")
 	}
 	binaryLog, err := os.ReadFile(filepath.Join(root, "binary.log"))
 	if err != nil {
@@ -96,7 +99,7 @@ main --app-path /missing/ChatGPT.app --app-path=%q --idle-window 10m --poll-inte
 	if lines := strings.Split(strings.TrimSpace(string(binaryLog)), "\n"); len(lines) != 2 || lines[0] != wantInstall || lines[1] != "--version" {
 		t.Fatalf("unexpected installed-binary calls: %q", lines)
 	}
-	if !strings.Contains(string(output), "codex-autoupdate version v0.1.1") || !strings.Contains(string(output), installed) {
+	if !strings.Contains(string(output), "codex-autoupdate version v9.9.9") || !strings.Contains(string(output), installed) {
 		t.Fatalf("installer output omitted version or path:\n%s", output)
 	}
 }
