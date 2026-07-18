@@ -73,7 +73,7 @@ func NewRoot(version string, stdout, stderr io.Writer) (*cobra.Command, error) {
 	flags.DurationVar(&config.pollInterval, "poll-interval", config.pollInterval, "interval between update checks")
 	flags.DurationVar(&config.activityPollInterval, "activity-poll-interval", config.activityPollInterval, "interval between Desktop task activity checks")
 	flags.DurationVar(&config.quitTimeout, "quit-timeout", config.quitTimeout, "maximum wait for a graceful Desktop shutdown")
-	flags.DurationVar(&config.launchTimeout, "launch-timeout", config.launchTimeout, "maximum wait for the updated Desktop app-server")
+	flags.DurationVar(&config.launchTimeout, "launch-timeout", config.launchTimeout, "maximum wait for the updated Desktop application")
 
 	root.AddCommand(newRunCommand(&config), newCheckCommand(&config), newInstallCommand(&config), newUninstallCommand(), newStatusCommand())
 	return root, nil
@@ -224,7 +224,7 @@ func newStatusCommand() *cobra.Command {
 func (s settings) watcher(logger *slog.Logger) watch.Watcher {
 	runner := macos.ExecRunner{}
 	inspector := macos.Inspector{Runner: runner}
-	processes := macos.ProcessFinder{Runner: runner}
+	processes := macos.ProcessFinder{Runner: runner, CodexHome: s.codexHome}
 	detector := activity.Detector{AppPath: s.appPath, CodexHome: s.codexHome, Processes: processes}
 	feed := appcast.Client{HTTPClient: &http.Client{Timeout: 30 * time.Second}, FeedURL: s.feedURL}
 	installer := update.Installer{

@@ -45,7 +45,8 @@ The script exits zero only if all of these are true:
 - the preflight appcast build was newer than the installed build;
 - the foreground watcher exited successfully;
 - the installed build increased to exactly the preflight appcast build;
-- the restarted Desktop app-server has a different PID;
+- the updated Desktop application process is running, with a different PID if it was running before the update;
+- the Desktop app-server remains discoverable through its control socket after restart;
 - the final app passes strict code-signature and Gatekeeper verification;
 - the watcher log contains the idle wait, graceful shutdown, and completed update events.
 

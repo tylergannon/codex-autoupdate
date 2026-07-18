@@ -2,6 +2,11 @@
 
 Research completed on 2026-07-17 against the installed ChatGPT Desktop app and Codex CLI before implementation.
 
+## 2026-07-18 runtime correction
+
+- Current Desktop tasks run through the long-lived app-server that owns `~/.codex/app-server-control/app-server-control.sock`; its executable may be rendered by `ps` as simply `codex`, so the control-socket owner is the stable process identity.
+- The app-server and detached crash/task helpers can outlive the GUI application. Update shutdown and readiness must therefore follow only `Contents/MacOS/ChatGPT`, while activity polling continues to follow the app-server control socket.
+
 ## Product and process identity
 
 - `/Applications/ChatGPT.app` displays as ChatGPT but has bundle identifier `com.openai.codex`.
@@ -34,7 +39,7 @@ Research completed on 2026-07-17 against the installed ChatGPT Desktop app and C
 4. Track a continuous configurable idle window, resetting whenever any Desktop rollout is active.
 5. Recheck activity immediately before shutdown.
 6. Ask the app to quit normally and abort rather than force-kill if it does not exit in time.
-7. copy the staged bundle onto the `/Applications` volume, rename the old and new bundles atomically, and retain the old bundle until the replacement app-server starts.
+7. copy the staged bundle onto the `/Applications` volume, rename the old and new bundles atomically, and retain the old bundle until the replacement application starts.
 8. Launch the replacement. Roll back and relaunch the prior bundle if readiness is not observed.
 
 ## Official product references
