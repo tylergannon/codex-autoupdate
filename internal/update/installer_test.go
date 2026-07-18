@@ -67,7 +67,7 @@ func TestPrepareDownloadsExtractsVerifiesAndStages(t *testing.T) {
 	}
 }
 
-func TestApplyAtomicallyReplacesAndWaitsForAppServer(t *testing.T) {
+func TestApplyAtomicallyReplacesAndWaitsForApplication(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	appPath := filepath.Join(root, "ChatGPT.app")
@@ -202,10 +202,11 @@ func (r *fixtureRunner) CombinedOutput(ctx context.Context, name string, args ..
 		r.mu.Lock()
 		launched := r.launched
 		r.mu.Unlock()
+		output := fmt.Sprintf("122 Fri Jul 17 09:00:00 2026 %s/Contents/Frameworks/Codex Framework.framework/Helpers/browser_crashpad_handler\n", r.appPath)
 		if launched && !r.neverReady {
-			return []byte(fmt.Sprintf("123 Fri Jul 17 09:30:03 2026 %s/Contents/Resources/codex app-server\n", r.appPath)), nil
+			output += fmt.Sprintf("123 Fri Jul 17 09:30:03 2026 %s/Contents/MacOS/ChatGPT\n", r.appPath)
 		}
-		return nil, nil
+		return []byte(output), nil
 	default:
 		return nil, fmt.Errorf("unexpected command %s %v", name, args)
 	}

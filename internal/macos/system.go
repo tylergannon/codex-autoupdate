@@ -128,15 +128,12 @@ type Process struct {
 }
 
 type ProcessFinder struct {
-	Runner Runner
+	Runner    Runner
+	CodexHome string
 }
 
 func (f ProcessFinder) All(ctx context.Context) ([]Process, error) {
-	runner := f.Runner
-	if runner == nil {
-		runner = ExecRunner{}
-	}
-	output, err := runner.CombinedOutput(ctx, "/bin/ps", "-axo", "pid=,lstart=,command=")
+	output, err := f.runner().CombinedOutput(ctx, "/bin/ps", "-axo", "pid=,lstart=,command=")
 	if err != nil {
 		return nil, commandError("list processes", output, err)
 	}
@@ -164,34 +161,78 @@ func (f ProcessFinder) DesktopAppServer(ctx context.Context, appPath string) (*P
 	if err != nil {
 		return nil, err
 	}
-	executable := filepath.Join(appPath, "Contents", "Resources", "codex")
-	var newest *Process
-	for index := range processes {
-		process := &processes[index]
-		if !strings.HasPrefix(process.Command, executable+" ") || !commandHasArgument(process.Command, "app-server") {
-			continue
-		}
-		if newest == nil || process.Started.After(newest.Started) {
-			copy := *process
-			newest = &copy
-		}
+	holders, checked, err := f.controlSocketHolders(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return newest, nil
+	if checked && len(holders) > 0 {
+		return newestMatching(processes, func(process Process) bool {
+			_, holdsSocket := holders[process.PID]
+			return holdsSocket && commandHasArgument(process.Command, "app-server")
+		}), nil
+	}
+
+	executable := filepath.Join(appPath, "Contents", "Resources", "codex")
+	return newestMatching(processes, func(process Process) bool {
+		return strings.HasPrefix(process.Command, executable+" ") && commandHasArgument(process.Command, "app-server")
+	}), nil
 }
 
-func (f ProcessFinder) BundleProcesses(ctx context.Context, appPath string) ([]Process, error) {
+func (f ProcessFinder) DesktopApplication(ctx context.Context, appPath string) (*Process, error) {
 	processes, err := f.All(ctx)
 	if err != nil {
 		return nil, err
 	}
-	prefix := filepath.Clean(appPath) + string(filepath.Separator)
-	return slices.Collect(func(yield func(Process) bool) {
-		for _, process := range processes {
-			if strings.HasPrefix(process.Command, prefix) && !yield(process) {
-				return
-			}
-		}
+	executable := filepath.Join(filepath.Clean(appPath), "Contents", "MacOS", "ChatGPT")
+	return newestMatching(processes, func(process Process) bool {
+		return process.Command == executable || strings.HasPrefix(process.Command, executable+" ")
 	}), nil
+}
+
+func (f ProcessFinder) controlSocketHolders(ctx context.Context) (map[int]struct{}, bool, error) {
+	if f.CodexHome == "" {
+		return nil, false, nil
+	}
+	socketPath := filepath.Join(f.CodexHome, "app-server-control", "app-server-control.sock")
+	output, err := f.runner().CombinedOutput(ctx, "/usr/sbin/lsof", "-n", "-t", socketPath)
+	if err != nil {
+		if strings.TrimSpace(string(output)) == "" {
+			return nil, true, nil
+		}
+		return nil, true, commandError("find Desktop app-server control socket owner", output, err)
+	}
+	holders := make(map[int]struct{})
+	for line := range strings.Lines(string(output)) {
+		value := strings.TrimSpace(line)
+		if value == "" {
+			continue
+		}
+		pid, err := strconv.Atoi(value)
+		if err != nil {
+			return nil, true, fmt.Errorf("invalid Desktop app-server PID %q from lsof", value)
+		}
+		holders[pid] = struct{}{}
+	}
+	return holders, true, nil
+}
+
+func (f ProcessFinder) runner() Runner {
+	if f.Runner != nil {
+		return f.Runner
+	}
+	return ExecRunner{}
+}
+
+func newestMatching(processes []Process, matches func(Process) bool) *Process {
+	var newest *Process
+	for _, process := range processes {
+		if !matches(process) || newest != nil && !process.Started.After(newest.Started) {
+			continue
+		}
+		copy := process
+		newest = &copy
+	}
+	return newest
 }
 
 func commandHasArgument(command, argument string) bool {

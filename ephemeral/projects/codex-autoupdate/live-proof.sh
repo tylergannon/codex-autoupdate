@@ -23,13 +23,15 @@ mkdir -p "$proof_root"
 "$binary" check --json >"$proof_root/before.json"
 before_build=$(jq -r '.installed.Build' "$proof_root/before.json")
 available_build=$(jq -r '.available.Build' "$proof_root/before.json")
-before_pid=$(jq -r '.activity.AppServerPID' "$proof_root/before.json")
+before_server_pid=$(jq -r '.activity.AppServerPID' "$proof_root/before.json")
+before_app_pid=$(/usr/bin/pgrep -f '^/Applications/ChatGPT[.]app/Contents/MacOS/ChatGPT( |$)' | /usr/bin/head -n 1 || true)
+before_app_pid=${before_app_pid:-0}
 
 if [ "$available_build" -le "$before_build" ]; then
   echo "no newer stable build is available; evidence written to $proof_root" >&2
   exit 3
 fi
-if [ "$before_pid" -eq 0 ]; then
+if [ "$before_server_pid" -eq 0 ]; then
   echo "ChatGPT Desktop app-server is not running; this would not prove a restart" >&2
   exit 3
 fi
@@ -45,22 +47,36 @@ echo "during the idle wait, run the two harmless Desktop tasks described in huma
 
 "$binary" check --json >"$proof_root/after.json"
 after_build=$(jq -r '.installed.Build' "$proof_root/after.json")
-after_pid=$(jq -r '.activity.AppServerPID' "$proof_root/after.json")
+after_server_pid=$(jq -r '.activity.AppServerPID' "$proof_root/after.json")
+after_app_pid=$(/usr/bin/pgrep -f '^/Applications/ChatGPT[.]app/Contents/MacOS/ChatGPT( |$)' | /usr/bin/head -n 1 || true)
+after_app_pid=${after_app_pid:-0}
 
 if [ "$after_build" -ne "$available_build" ]; then
   echo "installed build $after_build does not match expected build $available_build" >&2
   exit 4
 fi
-if [ "$after_pid" -eq 0 ] || [ "$after_pid" -eq "$before_pid" ]; then
-  echo "Desktop app-server PID did not change: before=$before_pid after=$after_pid" >&2
+if [ "$after_server_pid" -eq 0 ]; then
+  echo "Desktop app-server is not discoverable after the update" >&2
+  exit 5
+fi
+if [ "$after_app_pid" -eq 0 ]; then
+  echo "updated Desktop application is not running" >&2
+  exit 5
+fi
+if [ "$before_app_pid" -ne 0 ] && [ "$after_app_pid" -eq "$before_app_pid" ]; then
+  echo "Desktop application PID did not change: before=$before_app_pid after=$after_app_pid" >&2
   exit 5
 fi
 
 /usr/bin/codesign --verify --deep --strict --verbose=2 /Applications/ChatGPT.app 2>"$proof_root/codesign.txt"
 /usr/sbin/spctl --assess --type execute --verbose=2 /Applications/ChatGPT.app 2>"$proof_root/gatekeeper.txt"
 
-if ! grep -q "Desktop idle window satisfied" "$proof_root/watcher.log" || ! grep -q "requesting graceful ChatGPT Desktop shutdown" "$proof_root/watcher.log" || ! grep -q "ChatGPT Desktop update completed" "$proof_root/watcher.log"; then
+if ! grep -q "Desktop idle window satisfied" "$proof_root/watcher.log" || ! grep -q "ChatGPT Desktop update completed" "$proof_root/watcher.log"; then
   echo "watcher log is missing required lifecycle evidence" >&2
+  exit 6
+fi
+if [ "$before_app_pid" -ne 0 ] && ! grep -q "requesting graceful ChatGPT Desktop shutdown" "$proof_root/watcher.log"; then
+  echo "watcher log is missing the graceful shutdown event" >&2
   exit 6
 fi
 

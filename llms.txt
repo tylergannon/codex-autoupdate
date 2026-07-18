@@ -51,6 +51,6 @@ Uninstall stops the LaunchAgent and removes its plist and canonical binary. Logs
 
 The watcher compares the installed `CFBundleVersion` with OpenAI's stable ChatGPT Desktop Sparkle appcast. It stages the full update, verifies the exact build, bundle identifier, OpenAI signing team, strict code signature, Gatekeeper acceptance, and host architecture, then waits until Desktop Codex rollout records show no active task for the configured window. It checks activity again before asking ChatGPT to quit normally and never force-kills the app.
 
-If the replacement app-server does not become ready, the previous app is restored and relaunched. The failed build is quarantined at `~/Library/Caches/codex-autoupdate/failed-build-BUILD.json`, preventing repeated restarts for that build. A newer build remains eligible. Remove that marker only when deliberately retrying the same build.
+If the replacement application does not become ready, the previous app is restored and relaunched. The failed build is quarantined at `~/Library/Caches/codex-autoupdate/failed-build-BUILD.json`, preventing repeated restarts for that build. A newer build remains eligible. Remove that marker only when deliberately retrying the same build.
 
 The real end-to-end update proof is documented in `ephemeral/projects/codex-autoupdate/human-proof.md` and must be run from a separate Terminal when OpenAI advertises a build newer than the installed build.

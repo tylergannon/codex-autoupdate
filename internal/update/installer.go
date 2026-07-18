@@ -134,12 +134,12 @@ func (i *Installer) Apply(ctx context.Context, prepared Prepared, preflight func
 		}
 	}
 
-	processes, err := i.processes().BundleProcesses(ctx, i.AppPath)
+	application, err := i.processes().DesktopApplication(ctx, i.AppPath)
 	if err != nil {
 		return err
 	}
-	if len(processes) > 0 {
-		i.logger().Info("requesting graceful ChatGPT Desktop shutdown", "processes", len(processes))
+	if application != nil {
+		i.logger().Info("requesting graceful ChatGPT Desktop shutdown", "pid", application.PID)
 		output, quitErr := i.runner().CombinedOutput(ctx, "/usr/bin/osascript", "-e", `tell application id "com.openai.codex" to quit`)
 		if quitErr != nil {
 			return i.relaunchPrevious(ctx, current, commandError("request ChatGPT Desktop quit", output, quitErr))
@@ -226,11 +226,11 @@ func (i *Installer) download(ctx context.Context, release appcast.Release, archi
 func (i *Installer) waitForExit(ctx context.Context) error {
 	deadline := time.Now().Add(i.QuitTimeout)
 	for {
-		processes, err := i.processes().BundleProcesses(ctx, i.AppPath)
+		application, err := i.processes().DesktopApplication(ctx, i.AppPath)
 		if err != nil {
 			return err
 		}
-		if len(processes) == 0 {
+		if application == nil {
 			return nil
 		}
 		if time.Now().After(deadline) {
@@ -249,18 +249,18 @@ func (i *Installer) launchAndWait(ctx context.Context, expectedBuild int64) erro
 	}
 	deadline := time.Now().Add(i.LaunchTimeout)
 	for {
-		server, err := i.processes().DesktopAppServer(ctx, i.AppPath)
+		application, err := i.processes().DesktopApplication(ctx, i.AppPath)
 		if err != nil {
 			return err
 		}
-		if server != nil {
+		if application != nil {
 			bundle, inspectErr := i.inspector().Inspect(ctx, i.AppPath, true)
 			if inspectErr == nil && bundle.Build == expectedBuild {
 				return nil
 			}
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("updated ChatGPT Desktop app-server did not become ready within %s", i.LaunchTimeout)
+			return fmt.Errorf("updated ChatGPT Desktop application did not become ready within %s", i.LaunchTimeout)
 		}
 		if err := sleep(ctx, time.Second); err != nil {
 			return err
@@ -270,7 +270,7 @@ func (i *Installer) launchAndWait(ctx context.Context, expectedBuild int64) erro
 
 func (i *Installer) rollback(ctx context.Context, backupPath string, prepared Prepared, previous macos.Bundle, cause error) error {
 	i.logger().Error("updated app failed readiness check; rolling back", "error", cause)
-	if processes, err := i.processes().BundleProcesses(ctx, i.AppPath); err == nil && len(processes) > 0 {
+	if application, err := i.processes().DesktopApplication(ctx, i.AppPath); err == nil && application != nil {
 		_, _ = i.runner().CombinedOutput(ctx, "/usr/bin/osascript", "-e", `tell application id "com.openai.codex" to quit`)
 		_ = i.waitForExit(ctx)
 	}

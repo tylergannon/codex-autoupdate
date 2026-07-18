@@ -57,7 +57,7 @@ func (d *Detector) Detect(ctx context.Context) (Report, error) {
 	defer d.mu.Unlock()
 	processes := d.Processes
 	if processes == nil {
-		processes = macos.ProcessFinder{}
+		processes = macos.ProcessFinder{CodexHome: d.CodexHome}
 	}
 	server, err := processes.DesktopAppServer(ctx, d.AppPath)
 	if err != nil {
