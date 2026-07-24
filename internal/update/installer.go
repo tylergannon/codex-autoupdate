@@ -3,6 +3,7 @@ package update
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -141,31 +142,8 @@ func (i *Installer) Apply(ctx context.Context, prepared Prepared, preflight func
 		}
 	}
 
-	application, err := i.processes().Application(ctx, i.AppPath, i.identity().Executable)
-	if err != nil {
+	if err := i.shutdown(ctx); err != nil {
 		return err
-	}
-	if application != nil {
-		i.logger().Info("requesting graceful application shutdown", "harness", i.identity().Name, "pid", application.PID)
-		script := fmt.Sprintf(`tell application id %q to quit`, i.identity().BundleIdentifier)
-		output, quitErr := i.runner().CombinedOutput(ctx, "/usr/bin/osascript", "-e", script)
-		if quitErr != nil {
-			quitCause := commandError("request "+i.identity().Name+" quit", output, quitErr)
-			application, err = i.processes().Application(ctx, i.AppPath, i.identity().Executable)
-			if err != nil {
-				return fmt.Errorf("%w; recheck %s process: %v", quitCause, i.identity().Name, err)
-			}
-			if application != nil {
-				i.logger().Warn("graceful application shutdown was refused; sending SIGTERM", "harness", i.identity().Name, "pid", application.PID, "error", quitCause)
-				output, termErr := i.runner().CombinedOutput(ctx, "/bin/kill", "-TERM", strconv.Itoa(application.PID))
-				if termErr != nil {
-					return fmt.Errorf("%w; %w", quitCause, commandError("send SIGTERM to "+i.identity().Name, output, termErr))
-				}
-			}
-		}
-		if err := i.waitForExit(ctx); err != nil {
-			return err
-		}
 	}
 
 	backupPath := filepath.Join(filepath.Dir(i.AppPath), fmt.Sprintf(".%s.codex-autoupdate-backup-%s-%d", filepath.Base(i.AppPath), release.Key(current.Build), time.Now().UnixNano()))
@@ -275,6 +253,48 @@ func (i *Installer) waitForExit(ctx context.Context) error {
 	}
 }
 
+func (i *Installer) shutdown(ctx context.Context) error {
+	application, err := i.processes().Application(ctx, i.AppPath, i.identity().Executable)
+	if err != nil {
+		return err
+	}
+	if application == nil {
+		return nil
+	}
+	i.logger().Info("requesting graceful application shutdown", "harness", i.identity().Name, "pid", application.PID)
+	script := fmt.Sprintf(`tell application id %q to quit`, i.identity().BundleIdentifier)
+	output, quitErr := i.runner().CombinedOutput(ctx, "/usr/bin/osascript", "-e", script)
+	var gracefulCause error
+	if quitErr != nil {
+		gracefulCause = commandError("request "+i.identity().Name+" quit", output, quitErr)
+	} else {
+		exitErr := i.waitForExit(ctx)
+		if exitErr == nil {
+			return nil
+		}
+		if errors.Is(exitErr, context.Canceled) || errors.Is(exitErr, context.DeadlineExceeded) {
+			return exitErr
+		}
+		gracefulCause = exitErr
+	}
+	application, err = i.processes().Application(ctx, i.AppPath, i.identity().Executable)
+	if err != nil {
+		return fmt.Errorf("%w; recheck %s process: %v", gracefulCause, i.identity().Name, err)
+	}
+	if application == nil {
+		return nil
+	}
+	i.logger().Warn("graceful application shutdown did not stop the application; sending SIGTERM", "harness", i.identity().Name, "pid", application.PID, "error", gracefulCause)
+	output, termErr := i.runner().CombinedOutput(ctx, "/bin/kill", "-TERM", strconv.Itoa(application.PID))
+	if termErr != nil {
+		return fmt.Errorf("%w; %w", gracefulCause, commandError("send SIGTERM to "+i.identity().Name, output, termErr))
+	}
+	if err := i.waitForExit(ctx); err != nil {
+		return fmt.Errorf("%w; application still running after SIGTERM: %v", gracefulCause, err)
+	}
+	return nil
+}
+
 func (i *Installer) launchAndWait(ctx context.Context, expectedBuild string) error {
 	output, err := i.runner().CombinedOutput(ctx, "/usr/bin/open", i.AppPath)
 	if err != nil {
@@ -303,10 +323,13 @@ func (i *Installer) launchAndWait(ctx context.Context, expectedBuild string) err
 
 func (i *Installer) rollback(ctx context.Context, backupPath string, prepared Prepared, previous macos.Bundle, cause error) error {
 	i.logger().Error("updated app failed readiness check; rolling back", "error", cause)
-	if application, err := i.processes().Application(ctx, i.AppPath, i.identity().Executable); err == nil && application != nil {
-		script := fmt.Sprintf(`tell application id %q to quit`, i.identity().BundleIdentifier)
-		_, _ = i.runner().CombinedOutput(ctx, "/usr/bin/osascript", "-e", script)
-		_ = i.waitForExit(ctx)
+	if err := i.shutdown(ctx); err != nil {
+		markerErr := i.markFailure(prepared.Release, cause)
+		result := fmt.Errorf("%w; rollback could not stop failed replacement: %v; previous bundle retained at %s", cause, err, backupPath)
+		if markerErr != nil {
+			result = fmt.Errorf("%w; could not persist quarantine marker: %v", result, markerErr)
+		}
+		return result
 	}
 	failedPath := filepath.Join(filepath.Dir(i.AppPath), fmt.Sprintf(".%s.codex-autoupdate-failed-%s-%d", filepath.Base(i.AppPath), release.Key(prepared.Release.Build), time.Now().UnixNano()))
 	if err := os.Rename(i.AppPath, failedPath); err != nil {

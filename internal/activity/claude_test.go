@@ -14,6 +14,7 @@ import (
 type claudeProcesses struct {
 	application *macos.Process
 	processes   []macos.Process
+	openFiles   map[int]struct{}
 }
 
 func (p claudeProcesses) All(context.Context) ([]macos.Process, error) {
@@ -22,6 +23,10 @@ func (p claudeProcesses) All(context.Context) ([]macos.Process, error) {
 
 func (p claudeProcesses) Application(context.Context, string, string) (*macos.Process, error) {
 	return p.application, nil
+}
+
+func (p claudeProcesses) OpenFilesUnder(context.Context, string) (map[int]struct{}, error) {
+	return p.openFiles, nil
 }
 
 func TestClaudeDetectorOnlyReportsLiveSessionWorkers(t *testing.T) {
@@ -38,8 +43,8 @@ func TestClaudeDetectorOnlyReportsLiveSessionWorkers(t *testing.T) {
 			application: &macos.Process{PID: 10, Started: started},
 			processes: []macos.Process{
 				{PID: 10, Command: "/Applications/Claude.app/Contents/MacOS/Claude"},
-				{PID: 11, Command: "/bin/claude --session worker-live"},
-				{PID: 12, Command: "/bin/claude --session worker-archived"},
+				{PID: 11, Command: "/bin/session-worker --session worker-live"},
+				{PID: 12, Command: "/bin/session-worker --session worker-archived"},
 			},
 		},
 	}
@@ -67,6 +72,52 @@ func TestClaudeDetectorTreatsClosedApplicationAsIdle(t *testing.T) {
 	}
 	if report.Active() || !report.LastLifecycle.IsZero() {
 		t.Fatalf("unexpected report: %+v", report)
+	}
+}
+
+func TestClaudeDetectorReportsStandaloneClaudeCodeAndTaskProcesses(t *testing.T) {
+	t.Parallel()
+	started := time.Now().Add(-time.Minute)
+	report, err := (ClaudeDetector{
+		AppPath:    "/Applications/Claude.app",
+		ClaudeData: t.TempDir(),
+		TaskRoot:   t.TempDir(),
+		Processes: claudeProcesses{
+			processes: []macos.Process{
+				{PID: 20, Started: started, Command: "/Users/test/.local/bin/claude --print task"},
+				{PID: 21, Started: started.Add(time.Second), Command: "/bin/zsh -c npm test"},
+			},
+			openFiles: map[int]struct{}{21: {}},
+		},
+	}).Detect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprint(report.ActiveThreads); got != "[claude-code-pid:20 claude-task-pid:21]" {
+		t.Fatalf("active processes = %s", got)
+	}
+}
+
+func TestClaudeDetectorDoesNotTreatDesktopHelpersAsClaudeCode(t *testing.T) {
+	t.Parallel()
+	started := time.Now().Add(-time.Hour)
+	report, err := (ClaudeDetector{
+		AppPath:    "/Applications/Claude.app",
+		ClaudeData: t.TempDir(),
+		TaskRoot:   t.TempDir(),
+		Processes: claudeProcesses{
+			application: &macos.Process{PID: 10, Started: started},
+			processes: []macos.Process{
+				{PID: 10, Started: started, Command: "/Applications/Claude.app/Contents/MacOS/Claude"},
+				{PID: 11, Started: started, Command: "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper --type=gpu-process"},
+			},
+		},
+	}).Detect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Active() {
+		t.Fatalf("desktop helpers reported active: %v", report.ActiveThreads)
 	}
 }
 

@@ -126,6 +126,28 @@ func TestApplyUsesSIGTERMWhenScheduledTasksRefuseNormalQuit(t *testing.T) {
 	}
 }
 
+func TestApplyUsesSIGTERMWhenGracefulQuitReturnsButApplicationStaysRunning(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	appPath := filepath.Join(root, "ChatGPT.app")
+	stagedPath := filepath.Join(root, ".ChatGPT.app.codex-autoupdate-2.new")
+	writeFakeBundle(t, appPath, "1.0", 1)
+	writeFakeBundle(t, stagedPath, "2.0", 2)
+	runner := &fixtureRunner{appPath: appPath, launched: true, quitIgnored: true}
+	installer := Installer{AppPath: appPath, CacheDir: filepath.Join(root, "cache"), QuitTimeout: time.Nanosecond, LaunchTimeout: time.Second, Runner: runner}
+
+	if err := installer.Apply(context.Background(), Prepared{Release: appcast.Release{Build: "2", Version: "2.0"}, StagedPath: stagedPath}, nil); err != nil {
+		t.Fatal(err)
+	}
+	runner.mu.Lock()
+	commands := append([]string(nil), runner.commands...)
+	runner.mu.Unlock()
+	want := []string{"/usr/bin/osascript", "/bin/kill -TERM 123", "/usr/bin/open"}
+	if fmt.Sprint(commands) != fmt.Sprint(want) {
+		t.Fatalf("shutdown command sequence %v, want %v", commands, want)
+	}
+}
+
 func TestApplyLeavesBundlesUntouchedWhenSIGTERMFails(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -180,6 +202,32 @@ func TestApplyRestoresOldBundleWhenReplacementDoesNotStart(t *testing.T) {
 	}
 	if _, err := installer.Prepare(context.Background(), appcast.Release{Build: "2", Version: "2.0"}); err == nil || strings.Contains(err.Error(), "quarantined") {
 		t.Fatalf("expected deliberate marker removal to permit retry, got %v", err)
+	}
+}
+
+func TestRollbackTerminatesRunningFailedReplacementBeforeRestore(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	appPath := filepath.Join(root, "ChatGPT.app")
+	stagedPath := filepath.Join(root, ".ChatGPT.app.codex-autoupdate-2.new")
+	writeFakeBundle(t, appPath, "1.0", 1)
+	writeFakeBundle(t, stagedPath, "2.0", 2)
+	runner := &fixtureRunner{appPath: appPath, readinessBlocked: true, quitRefused: true}
+	installer := Installer{AppPath: appPath, CacheDir: filepath.Join(root, "cache"), QuitTimeout: time.Second, LaunchTimeout: time.Nanosecond, Runner: runner}
+
+	err := installer.Apply(context.Background(), Prepared{Release: appcast.Release{Build: "2", Version: "2.0"}, StagedPath: stagedPath}, nil)
+	if err == nil || !strings.Contains(err.Error(), "previous app restored") {
+		t.Fatalf("expected successful rollback report, got %v", err)
+	}
+	if build := readBuild(t, appPath); build != "1" {
+		t.Fatalf("installed build %s after rollback, want 1", build)
+	}
+	runner.mu.Lock()
+	commands := append([]string(nil), runner.commands...)
+	runner.mu.Unlock()
+	want := []string{"/usr/bin/open", "/usr/bin/osascript", "/bin/kill -TERM 123", "/usr/bin/open"}
+	if fmt.Sprint(commands) != fmt.Sprint(want) {
+		t.Fatalf("rollback command sequence %v, want %v", commands, want)
 	}
 }
 
@@ -296,11 +344,13 @@ func TestPrepareHonorsLegacyChatGPTQuarantineMarker(t *testing.T) {
 }
 
 type fixtureRunner struct {
-	appPath     string
-	identity    macos.Identity
-	neverReady  bool
-	quitRefused bool
-	termRefused bool
+	appPath          string
+	identity         macos.Identity
+	neverReady       bool
+	readinessBlocked bool
+	quitRefused      bool
+	quitIgnored      bool
+	termRefused      bool
 
 	mu       sync.Mutex
 	launched bool
@@ -312,6 +362,13 @@ func (r *fixtureRunner) CombinedOutput(ctx context.Context, name string, args ..
 	case "/usr/libexec/PlistBuddy", "/usr/bin/ditto":
 		return exec.CommandContext(ctx, name, args...).CombinedOutput()
 	case "/usr/bin/codesign":
+		r.mu.Lock()
+		readinessBlocked := r.readinessBlocked
+		launched := r.launched
+		r.mu.Unlock()
+		if readinessBlocked && launched && len(args) > 0 && args[len(args)-1] == r.appPath && readBuildValue(r.appPath) == "2" {
+			return []byte("replacement readiness blocked"), fmt.Errorf("exit status 1")
+		}
 		if len(args) > 0 && args[0] == "-dv" {
 			identity := r.bundleIdentity()
 			return []byte("Identifier=" + identity.BundleIdentifier + "\nTeamIdentifier=" + identity.TeamID + "\n"), nil
@@ -338,7 +395,9 @@ func (r *fixtureRunner) CombinedOutput(ctx context.Context, name string, args ..
 			r.mu.Unlock()
 			return []byte("execution error: User canceled. (-128)"), fmt.Errorf("exit status 1")
 		}
-		r.launched = false
+		if !r.quitIgnored {
+			r.launched = false
+		}
 		r.mu.Unlock()
 		return nil, nil
 	case "/bin/kill":
@@ -370,6 +429,14 @@ func (r *fixtureRunner) bundleIdentity() macos.Identity {
 		return macos.ChatGPTIdentity
 	}
 	return r.identity
+}
+
+func readBuildValue(appPath string) string {
+	output, err := exec.Command("/usr/libexec/PlistBuddy", "-c", "Print :CFBundleVersion", filepath.Join(appPath, "Contents", "Info.plist")).CombinedOutput()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
 }
 
 func writeFakeBundle(t *testing.T, path, version string, build int) {

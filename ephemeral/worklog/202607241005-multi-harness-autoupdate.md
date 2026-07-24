@@ -8,3 +8,10 @@ friction: The planning artifact was initially only emitted in chat instead of wr
 friction: The installed LaunchAgent held the normal cache lock during live proof -> use an isolated proof cache for an explicitly authorized one-shot replacement without disturbing the installed watcher.
 decision: Live forced reinstall was completed twice for idle Claude; ChatGPT was not forced past its correctly active Codex-task guard.
 decision: Live ChatGPT force proof reused its verified staged equal build and demonstrated repeated active-task deferral without quitting or replacing ChatGPT.
+correction: Do not declare implementation complete or request review while required live proof remains incomplete; unmet proof is unfinished work, not a safety-boundary footnote.
+review: The installed watcher owns the default lock for its lifetime, so the documented one-shot command originally failed and the isolated-cache proof bypassed the single-coordinator guarantee.
+decision: One-shot commands now request a cooperative takeover with a cache marker and `SIGUSR1`; the daemon yields only between safe coordinator steps, and launchd remains loaded to resume after the marker is removed.
+review: Live process inspection found Claude Code-launched task PIDs 17911 and 17914 still using deleted task-output paths while the original detector reported Claude idle.
+decision: Claude activity combines Desktop session identifiers, standalone Claude Code processes, and live standard streams under the per-user Claude task root; dormant metadata alone remains idle.
+review: Rollback discarded failed-replacement shutdown errors and could restore files while the new process survived.
+decision: Activation and rollback now share the same graceful-quit, exact-PID `SIGTERM`, and confirmed-process-absence path; rollback does not move bundles if shutdown fails.

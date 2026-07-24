@@ -2,9 +2,13 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"testing"
+
+	"github.com/tylergannon/codex-autoupdate/internal/runlock"
 )
 
 func TestDefaultHarnessSelectionAndFiltering(t *testing.T) {
@@ -93,5 +97,41 @@ func TestValidateRejectsUnknownHarness(t *testing.T) {
 	}
 	if err := config.validate(); err == nil {
 		t.Fatal("expected unknown harness error")
+	}
+}
+
+func TestOneShotRunRequestsSafeTakeoverToAcquireSharedLock(t *testing.T) {
+	t.Parallel()
+	cacheDir := t.TempDir()
+	held, err := runlock.Acquire(cacheDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, takeover, err := acquireRunLock(context.Background(), cacheDir, true, func(int) error {
+		return held.Close()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = lock.Close()
+		_ = takeover.Close()
+	}()
+}
+
+func TestContinuousRunDoesNotStopAgentOnLockContention(t *testing.T) {
+	t.Parallel()
+	cacheDir := t.TempDir()
+	held, err := runlock.Acquire(cacheDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = held.Close() }()
+	_, takeover, err := acquireRunLock(context.Background(), cacheDir, false, nil)
+	if !errors.Is(err, runlock.ErrAlreadyRunning) {
+		t.Fatalf("expected already-running error, got %v", err)
+	}
+	if takeover != nil {
+		t.Fatal("continuous run created a takeover")
 	}
 }

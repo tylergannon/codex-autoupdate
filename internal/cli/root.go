@@ -9,11 +9,13 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"os/user"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -135,19 +137,28 @@ func newUpdateCommand(config *settings) *cobra.Command {
 	return command
 }
 
-func (s settings) run(command *cobra.Command, once, force bool) error {
+func (s settings) run(command *cobra.Command, once, force bool) (resultErr error) {
 	if err := s.validate(); err != nil {
 		return err
 	}
-	lock, err := runlock.Acquire(s.cacheDir)
+	var wakeSignals chan os.Signal
+	if !once {
+		wakeSignals = make(chan os.Signal, 1)
+		signal.Notify(wakeSignals, syscall.SIGUSR1)
+		defer signal.Stop(wakeSignals)
+	}
+	lock, takeover, err := acquireRunLock(command.Context(), s.cacheDir, once, nil)
 	if err != nil {
+		if errors.Is(err, runlock.ErrYieldRequested) {
+			return nil
+		}
 		return err
 	}
 	logger := slog.New(slog.NewTextHandler(command.ErrOrStderr(), &slog.HandlerOptions{Level: slog.LevelInfo}))
 	defer func() {
-		if err := lock.Close(); err != nil {
-			logger.Error("release watcher lock", "error", err)
-		}
+		closeErr := lock.Close()
+		takeoverErr := takeover.Close()
+		resultErr = errors.Join(resultErr, closeErr, takeoverErr)
 	}()
 	watchers, err := s.watchers(logger)
 	if err != nil {
@@ -159,11 +170,76 @@ func (s settings) run(command *cobra.Command, once, force bool) error {
 		ActivityPollInterval: s.activityPollInterval,
 		Logger:               logger,
 	}
+	if wakeSignals != nil {
+		coordinator.Sleep = func(ctx context.Context, duration time.Duration) error {
+			timer := time.NewTimer(duration)
+			defer timer.Stop()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-timer.C:
+				return nil
+			case <-wakeSignals:
+				requested, err := runlock.TakeoverRequested(s.cacheDir)
+				if err != nil {
+					return err
+				}
+				if requested {
+					return runlock.ErrYieldRequested
+				}
+				return nil
+			}
+		}
+	}
 	err = coordinator.Run(command.Context(), once, force)
 	if errors.Is(err, context.Canceled) {
 		return nil
 	}
+	if errors.Is(err, runlock.ErrYieldRequested) {
+		return nil
+	}
 	return err
+}
+
+func acquireRunLock(ctx context.Context, cacheDir string, oneShot bool, wake func(int) error) (*runlock.Lock, *runlock.Takeover, error) {
+	if !oneShot {
+		requested, err := runlock.TakeoverRequested(cacheDir)
+		if err != nil {
+			return nil, nil, err
+		}
+		if requested {
+			return nil, nil, runlock.ErrYieldRequested
+		}
+	}
+	lock, err := runlock.Acquire(cacheDir)
+	if err == nil || !oneShot || !errors.Is(err, runlock.ErrAlreadyRunning) {
+		return lock, nil, err
+	}
+	takeover, err := runlock.RequestTakeover(cacheDir, wake)
+	if err != nil {
+		return nil, nil, errors.Join(runlock.ErrAlreadyRunning, err)
+	}
+	const (
+		retryInterval = 100 * time.Millisecond
+		retryTimeout  = 10 * time.Second
+	)
+	deadline := time.Now().Add(retryTimeout)
+	for {
+		lock, err = runlock.Acquire(cacheDir)
+		if err == nil {
+			return lock, takeover, nil
+		}
+		if !errors.Is(err, runlock.ErrAlreadyRunning) || time.Now().After(deadline) {
+			return nil, nil, errors.Join(err, takeover.Close())
+		}
+		timer := time.NewTimer(retryInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, nil, errors.Join(ctx.Err(), takeover.Close())
+		case <-timer.C:
+		}
+	}
 }
 
 func newCheckCommand(config *settings) *cobra.Command {

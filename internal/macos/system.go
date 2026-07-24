@@ -225,6 +225,35 @@ func (f ProcessFinder) Application(ctx context.Context, appPath, executableName 
 	}), nil
 }
 
+func (f ProcessFinder) OpenFilesUnder(ctx context.Context, root string) (map[int]struct{}, error) {
+	output, err := f.runner().CombinedOutput(ctx, "/usr/sbin/lsof", "-n", "-Fpn", "-d0,1,2")
+	if err != nil {
+		return nil, commandError("list process standard streams", output, err)
+	}
+	result := make(map[int]struct{})
+	currentPID := 0
+	prefix := filepath.Clean(root) + string(filepath.Separator)
+	for line := range strings.Lines(string(output)) {
+		value := strings.TrimSpace(line)
+		if len(value) < 2 {
+			continue
+		}
+		switch value[0] {
+		case 'p':
+			pid, err := strconv.Atoi(value[1:])
+			if err != nil {
+				return nil, fmt.Errorf("invalid process ID %q from lsof", value[1:])
+			}
+			currentPID = pid
+		case 'n':
+			if currentPID != 0 && strings.HasPrefix(value[1:], prefix) {
+				result[currentPID] = struct{}{}
+			}
+		}
+	}
+	return result, nil
+}
+
 func (f ProcessFinder) controlSocketHolders(ctx context.Context) (map[int]struct{}, bool, error) {
 	if f.CodexHome == "" {
 		return nil, false, nil

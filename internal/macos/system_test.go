@@ -99,3 +99,17 @@ func TestDesktopApplicationExcludesPersistentBundleHelpers(t *testing.T) {
 		t.Fatalf("unexpected application: %+v", application)
 	}
 }
+
+func TestOpenFilesUnderFindsDeletedClaudeTaskOutputs(t *testing.T) {
+	t.Parallel()
+	runner := commandRunner{
+		"/usr/sbin/lsof -n -Fpn -d0,1,2": "p20\nf1\nn/private/tmp/claude-501/session/tasks/task.output\np21\nf1\nn/private/tmp/other.output\n",
+	}
+	processes, err := (ProcessFinder{Runner: runner}).OpenFilesUnder(context.Background(), "/private/tmp/claude-501")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := processes[20]; !ok || len(processes) != 1 {
+		t.Fatalf("processes = %v, want only PID 20", processes)
+	}
+}

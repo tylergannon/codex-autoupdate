@@ -17,11 +17,13 @@ import (
 type ClaudeProcessSource interface {
 	All(ctx context.Context) ([]macos.Process, error)
 	Application(ctx context.Context, appPath, executableName string) (*macos.Process, error)
+	OpenFilesUnder(ctx context.Context, root string) (map[int]struct{}, error)
 }
 
 type ClaudeDetector struct {
 	AppPath    string
 	ClaudeData string
+	TaskRoot   string
 	Processes  ClaudeProcessSource
 }
 
@@ -35,17 +37,47 @@ func (d ClaudeDetector) Detect(ctx context.Context) (Report, error) {
 	if err != nil {
 		return Report{}, err
 	}
-	if application == nil {
-		return Report{}, nil
-	}
 	all, err := processes.All(ctx)
 	if err != nil {
 		return Report{}, err
 	}
-	report := Report{
-		AppServerPID:   application.PID,
-		AppServerStart: application.Started,
-		LastLifecycle:  application.Started,
+	report := Report{}
+	if application != nil {
+		report.AppServerPID = application.PID
+		report.AppServerStart = application.Started
+		report.LastLifecycle = application.Started
+	}
+	for _, process := range all {
+		if application != nil && process.PID == application.PID {
+			continue
+		}
+		if strings.HasPrefix(process.Command, filepath.Clean(d.AppPath)+string(filepath.Separator)) {
+			continue
+		}
+		if !isClaudeCodeProcess(process.Command) {
+			continue
+		}
+		report.ActiveThreads = append(report.ActiveThreads, fmt.Sprintf("claude-code-pid:%d", process.PID))
+		if process.Started.After(report.LastLifecycle) {
+			report.LastLifecycle = process.Started
+		}
+	}
+	taskRoot := d.TaskRoot
+	if taskRoot == "" {
+		taskRoot = filepath.Join("/private/tmp", fmt.Sprintf("claude-%d", os.Getuid()))
+	}
+	taskPIDs, err := processes.OpenFilesUnder(ctx, taskRoot)
+	if err != nil {
+		return Report{}, err
+	}
+	for _, process := range all {
+		if _, active := taskPIDs[process.PID]; !active {
+			continue
+		}
+		report.ActiveThreads = append(report.ActiveThreads, fmt.Sprintf("claude-task-pid:%d", process.PID))
+		if process.Started.After(report.LastLifecycle) {
+			report.LastLifecycle = process.Started
+		}
 	}
 	roots := []string{
 		filepath.Join(d.ClaudeData, "claude-code-sessions"),
@@ -73,6 +105,9 @@ func (d ClaudeDetector) Detect(ctx context.Context) (Report, error) {
 				return nil
 			}
 			active := sessionProcessRunning(all, record.identifiers())
+			if !active && application == nil {
+				return nil
+			}
 			if !active && record.LastActivity.Before(application.Started.Add(-10*time.Second)) {
 				return nil
 			}
@@ -91,6 +126,28 @@ func (d ClaudeDetector) Detect(ctx context.Context) (Report, error) {
 	slices.Sort(report.ActiveThreads)
 	report.ActiveThreads = slices.Compact(report.ActiveThreads)
 	return report, nil
+}
+
+func isClaudeCodeProcess(command string) bool {
+	fields := strings.Fields(command)
+	if len(fields) == 0 {
+		return false
+	}
+	executable := filepath.Clean(fields[0])
+	base := strings.ToLower(filepath.Base(executable))
+	if base == "claude" || base == "claude-code" {
+		return true
+	}
+	if strings.Contains(executable, "/.local/share/claude/versions/") {
+		return true
+	}
+	for _, field := range fields[1:] {
+		cleaned := filepath.Clean(field)
+		if strings.Contains(cleaned, "/@anthropic-ai/claude-code/") {
+			return true
+		}
+	}
+	return false
 }
 
 type claudeSession struct {
