@@ -9,23 +9,15 @@ import (
 	"net/url"
 	"os/exec"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/tylergannon/codex-autoupdate/internal/release"
 )
 
 const DefaultURL = "https://persistent.oaistatic.com/codex-app-prod/appcast.xml"
 
-type Release struct {
-	Build            int64
-	Version          string
-	MinimumSystem    string
-	Architecture     string
-	URL              string
-	Length           int64
-	SparkleSignature string
-	PublicationTime  time.Time
-}
+type Release = release.Release
 
 type Client struct {
 	HTTPClient  *http.Client
@@ -82,61 +74,35 @@ func (c Client) Latest(ctx context.Context) (Release, error) {
 	}
 	var latest Release
 	for _, item := range feed.Channel.Items {
-		release, err := item.release()
+		candidate, err := item.release()
 		if err != nil {
 			continue
 		}
-		if release.Architecture != "" && release.Architecture != runtime.GOARCH {
+		if candidate.Architecture != "" && candidate.Architecture != runtime.GOARCH {
 			continue
 		}
-		if release.MinimumSystem != "" {
-			if !isNumericVersion(release.MinimumSystem) || compareNumericVersions(hostVersion, release.MinimumSystem) < 0 {
+		if candidate.MinimumSystem != "" {
+			if !isNumericVersion(candidate.MinimumSystem) || compareNumericVersions(hostVersion, candidate.MinimumSystem) < 0 {
 				continue
 			}
 		}
-		if release.Build > latest.Build {
-			latest = release
+		if latest.Build == "" || compareNumericVersions(candidate.Build, latest.Build) > 0 {
+			latest = candidate
 		}
 	}
-	if latest.Build == 0 {
+	if latest.Build == "" {
 		return Release{}, fmt.Errorf("appcast contains no compatible %s release", runtime.GOARCH)
 	}
 	return latest, nil
 }
 
 func compareNumericVersions(left, right string) int {
-	leftParts := strings.Split(left, ".")
-	rightParts := strings.Split(right, ".")
-	length := max(len(leftParts), len(rightParts))
-	for index := range length {
-		var leftValue, rightValue int64
-		if index < len(leftParts) {
-			leftValue, _ = strconv.ParseInt(leftParts[index], 10, 64)
-		}
-		if index < len(rightParts) {
-			rightValue, _ = strconv.ParseInt(rightParts[index], 10, 64)
-		}
-		if leftValue < rightValue {
-			return -1
-		}
-		if leftValue > rightValue {
-			return 1
-		}
-	}
-	return 0
+	result, _ := release.Compare(left, right)
+	return result
 }
 
 func isNumericVersion(value string) bool {
-	parts := strings.SplitSeq(value, ".")
-	for part := range parts {
-		if part == "" {
-			return false
-		}
-		if _, err := strconv.ParseInt(part, 10, 64); err != nil {
-			return false
-		}
-	}
-	return true
+	return release.IsNumericVersion(value)
 }
 
 type rss struct {
@@ -164,8 +130,8 @@ type enclosure struct {
 }
 
 func (i item) release() (Release, error) {
-	build, err := strconv.ParseInt(strings.TrimSpace(i.Build), 10, 64)
-	if err != nil || build <= 0 {
+	build := strings.TrimSpace(i.Build)
+	if !release.IsNumericVersion(build) {
 		return Release{}, fmt.Errorf("invalid appcast build %q", i.Build)
 	}
 	downloadURL, err := url.Parse(i.Enclosure.URL)
@@ -179,8 +145,7 @@ func (i item) release() (Release, error) {
 	if version == "" {
 		version = strings.TrimSpace(i.Title)
 	}
-	publicationTime, _ := time.Parse(time.RFC1123Z, strings.TrimSpace(i.PubDate))
-	return Release{
+	result := Release{
 		Build:            build,
 		Version:          version,
 		MinimumSystem:    strings.TrimSpace(i.MinimumSystem),
@@ -188,8 +153,11 @@ func (i item) release() (Release, error) {
 		URL:              downloadURL.String(),
 		Length:           i.Enclosure.Length,
 		SparkleSignature: strings.TrimSpace(i.Enclosure.SparkleSignature),
-		PublicationTime:  publicationTime,
-	}, nil
+	}
+	if publicationTime := strings.TrimSpace(i.PubDate); publicationTime != "" {
+		result.PublicationTime, _ = time.Parse(time.RFC1123Z, publicationTime)
+	}
+	return result, nil
 }
 
 func normalizeArchitecture(value string) string {

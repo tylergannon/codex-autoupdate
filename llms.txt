@@ -1,31 +1,46 @@
 # Install and operate codex-autoupdate
 
-Act as the installer. Perform the installation and verify it; do not ask the user to choose a Go binary directory or manually register launchd.
+Act as the installer. Perform the installation and verify it; do not ask the
+user to choose a Go binary directory or manually register launchd.
 
-This software is for macOS. It requires Go, a logged-in administrator account, and ChatGPT Desktop. It installs one binary at `~/Library/Application Support/codex-autoupdate/codex-autoupdate` and registers the per-user LaunchAgent `com.tylergannon.codex-autoupdate`. It never uses `sudo`.
+This software is for macOS. It requires Go and a logged-in administrator
+account. It manages ChatGPT Desktop and Claude Desktop from one per-user
+LaunchAgent, `com.tylergannon.codex-autoupdate`, and never uses `sudo`. Both
+harnesses are enabled by default; missing applications are skipped.
 
 ## Install or upgrade
 
-Download the versioned installer, verify its published content hash, inspect it, and run it:
+Download the installer, verify its published content hash, inspect it, and run
+it:
 
 ```sh
 installer=$(mktemp)
 trap 'rm -f "$installer"' EXIT
 curl -fsSL https://raw.githubusercontent.com/tylergannon/codex-autoupdate/main/install.sh -o "$installer"
-printf '%s  %s\n' cf67d72f6816d0f844e6d76b0419cbd585c55be9b6e1ce639025e1d193f41f9e "$installer" | shasum -a 256 -c -
+printf '%s  %s\n' d0fe9aa28d576d9f24520a2de6d1fc8762ea56c13a2e4c780dd7762b6fb2a44d "$installer" | shasum -a 256 -c -
 sed -n '1,220p' "$installer"
 bash "$installer"
 ```
 
-The installer unconditionally selects the latest tagged release with `go install github.com/tylergannon/codex-autoupdate/cmd/codex-autoupdate@latest`. It has no version pin or override. The same procedure therefore upgrades an existing installation in place and refreshes its LaunchAgent.
+The installer always selects the latest tagged release with:
 
-To change the defaults, pass Cobra's global flags to the installer. For example:
+```sh
+go install github.com/tylergannon/codex-autoupdate/cmd/codex-autoupdate@latest
+```
+
+It upgrades an existing installation in place and refreshes its LaunchAgent.
+Pass global flags through the installer to persist configuration:
 
 ```sh
 bash "$installer" --idle-window 10m --poll-interval 30m
+bash "$installer" --harness claude
+bash "$installer" --chatgpt-app-path /absolute/path/ChatGPT.app \
+  --claude-app-path /absolute/path/Claude.app
 ```
 
-The default idle window is five minutes and the default update poll is fifteen minutes. A relocated ChatGPT application is supported with `--app-path /absolute/path/ChatGPT.app`.
+`--harness` accepts `chatgpt` or `claude` and may be repeated or comma-separated.
+Without it, both are enabled. `--app-path` remains an alias for
+`--chatgpt-app-path`.
 
 ## Verify and operate
 
@@ -36,21 +51,70 @@ binary="$HOME/Library/Application Support/codex-autoupdate/codex-autoupdate"
 "$binary" check --json
 ```
 
-`check` is read-only. Logs are written under `~/Library/Logs/codex-autoupdate/`.
+`check` is read-only and reports each selected harness independently. Logs are
+under `~/Library/Logs/codex-autoupdate/`.
 
-Useful foreground and removal commands:
+One-shot commands:
 
 ```sh
 "$binary" run --once
+"$binary" run --once --harness chatgpt
+"$binary" update
+"$binary" update --force
+"$binary" update --force --harness claude
+```
+
+`update --force` bypasses only the requirement that the official release be
+newer. It reinstalls an equal latest version, refuses an older release, waits
+for activity to become idle, and retains every verification and rollback
+safeguard. Force mode is never persisted in the LaunchAgent.
+
+Uninstall with:
+
+```sh
 "$binary" uninstall
 ```
 
-Uninstall stops the LaunchAgent and removes its plist and canonical binary. Logs, downloads, and failed-build quarantine markers are retained for diagnosis; remove `~/Library/Logs/codex-autoupdate/` and `~/Library/Caches/codex-autoupdate/` separately only when that history is no longer wanted.
+Uninstall removes the LaunchAgent plist and canonical binary. Logs, downloads,
+and quarantine markers remain for diagnosis.
 
-## Update behavior and recovery
+## Activity and replacement behavior
 
-The watcher compares the installed `CFBundleVersion` with OpenAI's stable ChatGPT Desktop Sparkle appcast. It stages the full update, verifies the exact build, bundle identifier, OpenAI signing team, strict code signature, Gatekeeper acceptance, and host architecture, then waits until Desktop Codex rollout records show no active task for the configured window. It checks activity again before asking ChatGPT to quit normally. If a scheduled-task warning refuses that request, it sends `SIGTERM` to the exact ChatGPT main process and confirms that the process exited before replacing the bundle. It never sends `SIGKILL`.
+The watcher discovers ChatGPT from OpenAI's stable Sparkle appcast and Claude
+from Anthropic's desktop Squirrel update API. Each harness stages a complete
+application bundle and owns an independent uninterrupted idle window.
 
-If the replacement application does not become ready, the previous app is restored and relaunched. The failed build is quarantined at `~/Library/Caches/codex-autoupdate/failed-build-BUILD.json`, preventing repeated restarts for that build. A newer build remains eligible. Remove that marker only when deliberately retrying the same build.
+Active means Codex, Claude Code, or Claude Cowork work is currently executing.
+Open UI windows, ordinary chat use, dormant sessions, configured schedules, and
+future scheduled work do not count. Unreadable activity state fails closed for
+that harness and polling cycle.
 
-The real end-to-end update proof is documented in `ephemeral/projects/codex-autoupdate/human-proof.md` and must be run from a separate Terminal when OpenAI advertises a build newer than the installed build.
+Immediately before replacement, the updater repeats the activity and installed
+version checks. It then:
+
+1. verifies the advertised version, pinned bundle identifier and signing team,
+   strict code signature, Gatekeeper acceptance, and host architecture;
+2. asks the exact application to quit normally;
+3. if quit is refused, re-resolves the exact main PID and sends `SIGTERM`;
+4. confirms process absence, atomically replaces the bundle, relaunches it, and
+   verifies the signed expected version became ready.
+
+It never sends `SIGKILL`. Replacements are serialized in `chatgpt`, then
+`claude` order. A busy, missing, or failed harness does not block the other.
+
+## Recovery
+
+If a replacement does not become ready, the prior application is restored and
+relaunched. The failed version is quarantined separately under:
+
+```text
+~/Library/Caches/codex-autoupdate/chatgpt/failed-version-VERSION.json
+~/Library/Caches/codex-autoupdate/claude/failed-version-VERSION.json
+```
+
+A newer version remains eligible. Remove a marker only when deliberately
+retrying that same version. Staging, residue, rollback, and quarantine state is
+partitioned by harness.
+
+Repository proof and operator notes are under
+`ephemeral/projects/codex-autoupdate/`.

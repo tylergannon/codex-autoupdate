@@ -14,10 +14,14 @@ func TestRenderPlistPreservesArgumentsAndEscapesXML(t *testing.T) {
 	t.Parallel()
 	content, err := renderPlist(Config{
 		Executable:           "/tmp/a&b/codex-autoupdate",
-		AppPath:              "/Applications/ChatGPT.app",
+		Harnesses:            []string{"chatgpt", "claude"},
+		ChatGPTAppPath:       "/Applications/ChatGPT.app",
+		ClaudeAppPath:        "/Applications/Claude.app",
 		CodexHome:            "/tmp/.codex",
+		ClaudeData:           "/tmp/Claude",
 		CacheDir:             "/tmp/cache",
 		FeedURL:              "https://example.test/appcast.xml?a=1&b=2",
+		ClaudeFeedURL:        "https://example.test/claude.json",
 		IdleWindow:           "5m0s",
 		PollInterval:         "15m0s",
 		ActivityPollInterval: "5s",
@@ -28,7 +32,7 @@ func TestRenderPlistPreservesArgumentsAndEscapesXML(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(content)
-	for _, expected := range []string{"/tmp/a&amp;b/codex-autoupdate", "appcast.xml?a=1&amp;b=2", "--idle-window", "5m0s", "<key>KeepAlive</key>"} {
+	for _, expected := range []string{"/tmp/a&amp;b/codex-autoupdate", "appcast.xml?a=1&amp;b=2", "--harness", "chatgpt", "claude", "--idle-window", "5m0s", "<key>KeepAlive</key>"} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("plist missing %q:\n%s", expected, text)
 		}
@@ -120,7 +124,7 @@ func TestManagerInstallRefreshStatusAndUninstall(t *testing.T) {
 	}
 }
 
-func TestManagerInstallRejectsNoncanonicalExecutableAndMissingApp(t *testing.T) {
+func TestManagerInstallRejectsNoncanonicalExecutableAndInvalidConfig(t *testing.T) {
 	t.Parallel()
 	home := t.TempDir()
 	runner := &recordingRunner{}
@@ -151,9 +155,11 @@ func TestManagerInstallRejectsNoncanonicalExecutableAndMissingApp(t *testing.T) 
 	if err == nil || !strings.Contains(err.Error(), "LaunchAgent requires") {
 		t.Fatalf("expected canonical-path error, got %v", err)
 	}
-	err = manager.Install(context.Background(), testConfig(paths.binary, filepath.Join(home, "missing", "ChatGPT.app")))
-	if err == nil || !strings.Contains(err.Error(), "ChatGPT Desktop is not installed") {
-		t.Fatalf("expected missing-app error, got %v", err)
+	invalid := testConfig(paths.binary, filepath.Join(home, "missing", "ChatGPT.app"))
+	invalid.ClaudeAppPath = filepath.Join(home, "Claude.invalid")
+	err = manager.Install(context.Background(), invalid)
+	if err == nil || !strings.Contains(err.Error(), "claude application path") {
+		t.Fatalf("expected invalid-config error, got %v", err)
 	}
 	if len(runner.commands) != 0 {
 		t.Fatalf("launchctl ran on rejected install: %v", runner.commands)
@@ -181,10 +187,14 @@ func (r *recordingRunner) CombinedOutput(_ context.Context, name string, args ..
 func testConfig(executable, appPath string) Config {
 	return Config{
 		Executable:           executable,
-		AppPath:              appPath,
+		Harnesses:            []string{"chatgpt", "claude"},
+		ChatGPTAppPath:       appPath,
+		ClaudeAppPath:        filepath.Join(filepath.Dir(appPath), "Claude.app"),
 		CodexHome:            filepath.Join(filepath.Dir(appPath), ".codex"),
+		ClaudeData:           filepath.Join(filepath.Dir(appPath), "Claude"),
 		CacheDir:             filepath.Join(filepath.Dir(appPath), "cache"),
 		FeedURL:              "https://example.test/appcast.xml",
+		ClaudeFeedURL:        "https://example.test/claude.json",
 		IdleWindow:           "5m0s",
 		PollInterval:         "15m0s",
 		ActivityPollInterval: "5s",

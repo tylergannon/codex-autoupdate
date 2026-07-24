@@ -15,6 +15,30 @@ import (
 const (
 	BundleIdentifier = "com.openai.codex"
 	OpenAITeamID     = "2DC432GLL2"
+	ClaudeBundleID   = "com.anthropic.claudefordesktop"
+	AnthropicTeamID  = "Q6L2SF6YDW"
+)
+
+type Identity struct {
+	Name             string
+	BundleIdentifier string
+	TeamID           string
+	Executable       string
+}
+
+var (
+	ChatGPTIdentity = Identity{
+		Name:             "ChatGPT Desktop",
+		BundleIdentifier: BundleIdentifier,
+		TeamID:           OpenAITeamID,
+		Executable:       "ChatGPT",
+	}
+	ClaudeIdentity = Identity{
+		Name:             "Claude Desktop",
+		BundleIdentifier: ClaudeBundleID,
+		TeamID:           AnthropicTeamID,
+		Executable:       "Claude",
+	}
 )
 
 type Runner interface {
@@ -31,12 +55,13 @@ type Bundle struct {
 	Path       string
 	Identifier string
 	Version    string
-	Build      int64
+	Build      string
 	TeamID     string
 }
 
 type Inspector struct {
-	Runner Runner
+	Runner   Runner
+	Identity Identity
 }
 
 func (i Inspector) Inspect(ctx context.Context, appPath string, verify bool) (Bundle, error) {
@@ -57,16 +82,16 @@ func (i Inspector) Inspect(ctx context.Context, appPath string, verify bool) (Bu
 	if err != nil {
 		return Bundle{}, err
 	}
-	build, err := strconv.ParseInt(buildText, 10, 64)
-	if err != nil || build <= 0 {
+	if !numericVersion(buildText) {
 		return Bundle{}, fmt.Errorf("invalid CFBundleVersion %q in %s", buildText, infoPath)
 	}
 
-	bundle := Bundle{Path: appPath, Identifier: identifier, Version: version, Build: build}
+	bundle := Bundle{Path: appPath, Identifier: identifier, Version: version, Build: buildText}
 	if !verify {
 		return bundle, nil
 	}
-	if identifier != BundleIdentifier {
+	identity := i.identity()
+	if identifier != identity.BundleIdentifier {
 		return Bundle{}, fmt.Errorf("unexpected bundle identifier %q in %s", identifier, appPath)
 	}
 	if output, err := runner.CombinedOutput(ctx, "/usr/bin/codesign", "--verify", "--deep", "--strict", "--verbose=2", appPath); err != nil {
@@ -77,13 +102,13 @@ func (i Inspector) Inspect(ctx context.Context, appPath string, verify bool) (Bu
 		return Bundle{}, commandError("read code signature", output, err)
 	}
 	bundle.TeamID = signatureValue(string(output), "TeamIdentifier")
-	if bundle.TeamID != OpenAITeamID {
+	if bundle.TeamID != identity.TeamID {
 		return Bundle{}, fmt.Errorf("unexpected signing team %q for %s", bundle.TeamID, appPath)
 	}
 	if output, err := runner.CombinedOutput(ctx, "/usr/sbin/spctl", "--assess", "--type", "execute", "--verbose=2", appPath); err != nil {
 		return Bundle{}, commandError("assess app with Gatekeeper", output, err)
 	}
-	executable := filepath.Join(appPath, "Contents", "MacOS", "ChatGPT")
+	executable := filepath.Join(appPath, "Contents", "MacOS", identity.Executable)
 	output, err = runner.CombinedOutput(ctx, "/usr/bin/lipo", "-archs", executable)
 	if err != nil {
 		return Bundle{}, commandError("inspect executable architecture", output, err)
@@ -96,6 +121,13 @@ func (i Inspector) Inspect(ctx context.Context, appPath string, verify bool) (Bu
 		return Bundle{}, fmt.Errorf("app executable does not contain host architecture %s", wantedArch)
 	}
 	return bundle, nil
+}
+
+func (i Inspector) identity() Identity {
+	if i.Identity.BundleIdentifier == "" {
+		return ChatGPTIdentity
+	}
+	return i.Identity
 }
 
 func plistValue(ctx context.Context, runner Runner, plistPath, key string) (string, error) {
@@ -179,11 +211,15 @@ func (f ProcessFinder) DesktopAppServer(ctx context.Context, appPath string) (*P
 }
 
 func (f ProcessFinder) DesktopApplication(ctx context.Context, appPath string) (*Process, error) {
+	return f.Application(ctx, appPath, ChatGPTIdentity.Executable)
+}
+
+func (f ProcessFinder) Application(ctx context.Context, appPath, executableName string) (*Process, error) {
 	processes, err := f.All(ctx)
 	if err != nil {
 		return nil, err
 	}
-	executable := filepath.Join(filepath.Clean(appPath), "Contents", "MacOS", "ChatGPT")
+	executable := filepath.Join(filepath.Clean(appPath), "Contents", "MacOS", executableName)
 	return newestMatching(processes, func(process Process) bool {
 		return process.Command == executable || strings.HasPrefix(process.Command, executable+" ")
 	}), nil
@@ -237,6 +273,18 @@ func newestMatching(processes []Process, matches func(Process) bool) *Process {
 
 func commandHasArgument(command, argument string) bool {
 	return slices.Contains(strings.Fields(command), argument)
+}
+
+func numericVersion(value string) bool {
+	for part := range strings.SplitSeq(value, ".") {
+		if part == "" {
+			return false
+		}
+		if _, err := strconv.ParseUint(part, 10, 64); err != nil {
+			return false
+		}
+	}
+	return value != ""
 }
 
 func commandError(action string, output []byte, err error) error {
