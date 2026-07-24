@@ -69,6 +69,12 @@ newer. It reinstalls an equal latest version, refuses an older release, waits
 for activity to become idle, and retains every verification and rollback
 safeguard. Force mode is never persisted in the LaunchAgent.
 
+The installed watcher normally owns the shared coordinator lock. A one-shot
+command writes a per-cache takeover request and wakes the watcher; the watcher
+yields only after its current coordinator step is safe. The one-shot then uses
+the same lock and cache. Launchd resumes the watcher after the request is
+removed. Do not work around lock contention with a second `--cache-dir`.
+
 Uninstall with:
 
 ```sh
@@ -87,7 +93,9 @@ application bundle and owns an independent uninterrupted idle window.
 Active means Codex, Claude Code, or Claude Cowork work is currently executing.
 Open UI windows, ordinary chat use, dormant sessions, configured schedules, and
 future scheduled work do not count. Unreadable activity state fails closed for
-that harness and polling cycle.
+that harness and polling cycle. Claude detection covers Desktop session
+workers, standalone Claude Code processes, and Claude task processes that still
+hold task output streams.
 
 Immediately before replacement, the updater repeats the activity and installed
 version checks. It then:
@@ -105,7 +113,9 @@ It never sends `SIGKILL`. Replacements are serialized in `chatgpt`, then
 ## Recovery
 
 If a replacement does not become ready, the prior application is restored and
-relaunched. The failed version is quarantined separately under:
+relaunched. Rollback uses the same graceful-quit and exact-main-PID `SIGTERM`
+path and will not move a running failed replacement. The failed version is
+quarantined separately under:
 
 ```text
 ~/Library/Caches/codex-autoupdate/chatgpt/failed-version-VERSION.json

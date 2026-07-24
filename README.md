@@ -36,6 +36,10 @@ binary="$HOME/Library/Application Support/codex-autoupdate/codex-autoupdate"
 `update --force` safely reinstalls the latest official release when it equals
 the installed version. It never permits downgrade and retains activity,
 signature, identity, readiness, rollback, and quarantine checks.
+When the installed LaunchAgent owns the coordinator lock, a one-shot command
+requests a cooperative handoff. The watcher finishes its current safe step,
+yields the same lock, and launchd resumes it after the command; no second cache
+or competing coordinator is used.
 
 Each harness has its own idle window. Open windows, ordinary chat use, dormant
 sessions, and future schedules do not block replacement; currently executing

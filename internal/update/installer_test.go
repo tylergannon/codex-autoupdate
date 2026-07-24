@@ -229,6 +229,39 @@ func TestRollbackTerminatesRunningFailedReplacementBeforeRestore(t *testing.T) {
 	if fmt.Sprint(commands) != fmt.Sprint(want) {
 		t.Fatalf("rollback command sequence %v, want %v", commands, want)
 	}
+	if _, err := os.Stat(installer.failurePath("2")); err != nil {
+		t.Fatalf("rollback quarantine marker missing: %v", err)
+	}
+	backups, err := filepath.Glob(filepath.Join(root, ".ChatGPT.app.codex-autoupdate-backup-*"))
+	if err != nil || len(backups) != 0 {
+		t.Fatalf("rollback backup was not cleaned up: %v, %v", backups, err)
+	}
+}
+
+func TestRollbackDoesNotMoveBundlesWhenFailedReplacementCannotStop(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	appPath := filepath.Join(root, "ChatGPT.app")
+	stagedPath := filepath.Join(root, ".ChatGPT.app.codex-autoupdate-2.new")
+	writeFakeBundle(t, appPath, "1.0", 1)
+	writeFakeBundle(t, stagedPath, "2.0", 2)
+	runner := &fixtureRunner{appPath: appPath, readinessBlocked: true, quitRefused: true, termRefused: true}
+	installer := Installer{AppPath: appPath, CacheDir: filepath.Join(root, "cache"), QuitTimeout: time.Second, LaunchTimeout: time.Nanosecond, Runner: runner}
+
+	err := installer.Apply(context.Background(), Prepared{Release: appcast.Release{Build: "2", Version: "2.0"}, StagedPath: stagedPath}, nil)
+	if err == nil || !strings.Contains(err.Error(), "rollback could not stop failed replacement") {
+		t.Fatalf("expected safe rollback refusal, got %v", err)
+	}
+	if build := readBuild(t, appPath); build != "2" {
+		t.Fatalf("running replacement bundle moved despite failed shutdown; build = %s", build)
+	}
+	backups, globErr := filepath.Glob(filepath.Join(root, ".ChatGPT.app.codex-autoupdate-backup-*"))
+	if globErr != nil || len(backups) != 1 || readBuild(t, backups[0]) != "1" {
+		t.Fatalf("previous bundle was not retained for recovery: %v, %v", backups, globErr)
+	}
+	if _, statErr := os.Stat(installer.failurePath("2")); statErr != nil {
+		t.Fatalf("failed replacement was not quarantined: %v", statErr)
+	}
 }
 
 func TestApplyRelaunchesPreviousAppWhenActivationRenameFails(t *testing.T) {

@@ -24,5 +24,5 @@ force.
 - One LaunchAgent coordinates both harnesses and preserves existing ChatGPT behavior.
 - Missing applications are harmless, harness state is reported independently, and failures are isolated.
 - Automated tests cover selection, dotted versions, idle behavior, serialization, update races, forced equal-version replacement, downgrade refusal, verification, rollback, quarantine, and failure isolation.
-- Live-safe proof demonstrates production release discovery and verified installed-bundle inspection for both applications. Destructive live replacement is only run with explicit operator consent.
-
+- Live macOS proof repeatedly forces both applications, demonstrates real-work deferral, verifies signed bundle replacement and relaunch, and exercises controlled readiness-failure rollback.
+- Completion is not claimed while any required live replacement or rollback proof remains missing.
