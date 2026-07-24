@@ -99,6 +99,54 @@ func TestApplyAtomicallyReplacesAndWaitsForApplication(t *testing.T) {
 	}
 }
 
+func TestApplyUsesSIGTERMWhenScheduledTasksRefuseNormalQuit(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	appPath := filepath.Join(root, "ChatGPT.app")
+	stagedPath := filepath.Join(root, ".ChatGPT.app.codex-autoupdate-2.new")
+	writeFakeBundle(t, appPath, "1.0", 1)
+	writeFakeBundle(t, stagedPath, "2.0", 2)
+	runner := &fixtureRunner{appPath: appPath, launched: true, quitRefused: true}
+	installer := Installer{AppPath: appPath, CacheDir: filepath.Join(root, "cache"), QuitTimeout: time.Second, LaunchTimeout: time.Second, Runner: runner}
+
+	err := installer.Apply(context.Background(), Prepared{Release: appcast.Release{Build: 2, Version: "2.0"}, StagedPath: stagedPath}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if build := readBuild(t, appPath); build != "2" {
+		t.Fatalf("installed build %s, want 2", build)
+	}
+	runner.mu.Lock()
+	commands := append([]string(nil), runner.commands...)
+	runner.mu.Unlock()
+	want := []string{"/usr/bin/osascript", "/bin/kill -TERM 123", "/usr/bin/open"}
+	if fmt.Sprint(commands) != fmt.Sprint(want) {
+		t.Fatalf("shutdown command sequence %v, want %v", commands, want)
+	}
+}
+
+func TestApplyLeavesBundlesUntouchedWhenSIGTERMFails(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	appPath := filepath.Join(root, "ChatGPT.app")
+	stagedPath := filepath.Join(root, ".ChatGPT.app.codex-autoupdate-2.new")
+	writeFakeBundle(t, appPath, "1.0", 1)
+	writeFakeBundle(t, stagedPath, "2.0", 2)
+	runner := &fixtureRunner{appPath: appPath, launched: true, quitRefused: true, termRefused: true}
+	installer := Installer{AppPath: appPath, CacheDir: filepath.Join(root, "cache"), QuitTimeout: time.Second, LaunchTimeout: time.Second, Runner: runner}
+
+	err := installer.Apply(context.Background(), Prepared{Release: appcast.Release{Build: 2, Version: "2.0"}, StagedPath: stagedPath}, nil)
+	if err == nil || !strings.Contains(err.Error(), "User canceled") || !strings.Contains(err.Error(), "send SIGTERM") {
+		t.Fatalf("expected both shutdown errors, got %v", err)
+	}
+	if build := readBuild(t, appPath); build != "1" {
+		t.Fatalf("installed build %s after failed shutdown, want 1", build)
+	}
+	if build := readBuild(t, stagedPath); build != "2" {
+		t.Fatalf("staged build %s after failed shutdown, want 2", build)
+	}
+}
+
 func TestApplyRestoresOldBundleWhenReplacementDoesNotStart(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -164,11 +212,14 @@ func TestApplyRelaunchesPreviousAppWhenActivationRenameFails(t *testing.T) {
 }
 
 type fixtureRunner struct {
-	appPath    string
-	neverReady bool
+	appPath     string
+	neverReady  bool
+	quitRefused bool
+	termRefused bool
 
 	mu       sync.Mutex
 	launched bool
+	commands []string
 }
 
 func (r *fixtureRunner) CombinedOutput(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -191,10 +242,26 @@ func (r *fixtureRunner) CombinedOutput(ctx context.Context, name string, args ..
 	case "/usr/bin/open":
 		r.mu.Lock()
 		r.launched = true
+		r.commands = append(r.commands, name)
 		r.mu.Unlock()
 		return nil, nil
 	case "/usr/bin/osascript":
 		r.mu.Lock()
+		r.commands = append(r.commands, name)
+		if r.quitRefused {
+			r.mu.Unlock()
+			return []byte("execution error: User canceled. (-128)"), fmt.Errorf("exit status 1")
+		}
+		r.launched = false
+		r.mu.Unlock()
+		return nil, nil
+	case "/bin/kill":
+		r.mu.Lock()
+		r.commands = append(r.commands, strings.Join(append([]string{name}, args...), " "))
+		if r.termRefused {
+			r.mu.Unlock()
+			return []byte("Operation not permitted"), fmt.Errorf("exit status 1")
+		}
 		r.launched = false
 		r.mu.Unlock()
 		return nil, nil

@@ -14,7 +14,7 @@ curl -fsSL https://raw.githubusercontent.com/tylergannon/codex-autoupdate/main/i
 
 `codex-autoupdate` is a macOS user LaunchAgent that watches OpenAI's stable ChatGPT Desktop appcast. When a newer build is available, it waits until Desktop-managed Codex tasks have been idle for five uninterrupted minutes, then verifies, replaces, and restarts `ChatGPT.app`.
 
-Requirements: macOS, Go, ChatGPT Desktop, and a logged-in administrator account. The watcher never force-kills ChatGPT and rolls back an update that does not become ready.
+Requirements: macOS, Go, ChatGPT Desktop, and a logged-in administrator account. The watcher first asks ChatGPT to quit normally. If a scheduled-task warning refuses that request after the idle checks pass, it sends `SIGTERM` to the exact ChatGPT main process; it never sends `SIGKILL`. It rolls back an update that does not become ready.
 
 The installer always selects the latest tagged release.
 
