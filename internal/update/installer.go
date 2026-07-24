@@ -142,7 +142,18 @@ func (i *Installer) Apply(ctx context.Context, prepared Prepared, preflight func
 		i.logger().Info("requesting graceful ChatGPT Desktop shutdown", "pid", application.PID)
 		output, quitErr := i.runner().CombinedOutput(ctx, "/usr/bin/osascript", "-e", `tell application id "com.openai.codex" to quit`)
 		if quitErr != nil {
-			return i.relaunchPrevious(ctx, current, commandError("request ChatGPT Desktop quit", output, quitErr))
+			quitCause := commandError("request ChatGPT Desktop quit", output, quitErr)
+			application, err = i.processes().DesktopApplication(ctx, i.AppPath)
+			if err != nil {
+				return fmt.Errorf("%w; recheck ChatGPT Desktop process: %v", quitCause, err)
+			}
+			if application != nil {
+				i.logger().Warn("graceful ChatGPT Desktop shutdown was refused; sending SIGTERM", "pid", application.PID, "error", quitCause)
+				output, termErr := i.runner().CombinedOutput(ctx, "/bin/kill", "-TERM", strconv.Itoa(application.PID))
+				if termErr != nil {
+					return fmt.Errorf("%w; %w", quitCause, commandError("send SIGTERM to ChatGPT Desktop", output, termErr))
+				}
+			}
 		}
 		if err := i.waitForExit(ctx); err != nil {
 			return err
@@ -234,7 +245,7 @@ func (i *Installer) waitForExit(ctx context.Context) error {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("ChatGPT Desktop did not exit gracefully within %s; update aborted", i.QuitTimeout)
+			return fmt.Errorf("ChatGPT Desktop did not exit within %s; update aborted", i.QuitTimeout)
 		}
 		if err := sleep(ctx, 500*time.Millisecond); err != nil {
 			return err
