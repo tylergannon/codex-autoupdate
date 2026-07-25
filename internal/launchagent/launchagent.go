@@ -20,10 +20,14 @@ const Label = "com.tylergannon.codex-autoupdate"
 
 type Config struct {
 	Executable           string
-	AppPath              string
+	Harnesses            []string
+	ChatGPTAppPath       string
+	ClaudeAppPath        string
 	CodexHome            string
+	ClaudeData           string
 	CacheDir             string
 	FeedURL              string
+	ClaudeFeedURL        string
 	IdleWindow           string
 	PollInterval         string
 	ActivityPollInterval string
@@ -56,7 +60,7 @@ func (m Manager) Install(ctx context.Context, config Config) error {
 	if err != nil {
 		return err
 	}
-	if err := validateApp(config.AppPath); err != nil {
+	if err := validateConfig(config); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(paths.stdout), 0o755); err != nil {
@@ -208,13 +212,20 @@ func (m Manager) runner() Runner {
 	return execRunner{}
 }
 
-func validateApp(path string) error {
-	info, err := os.Stat(path)
-	if err != nil {
-		return fmt.Errorf("ChatGPT Desktop is not installed at %s: %w", path, err)
+func validateConfig(config Config) error {
+	if !filepath.IsAbs(config.ChatGPTAppPath) || filepath.Base(config.ChatGPTAppPath) != "ChatGPT.app" {
+		return fmt.Errorf("ChatGPT application path must be absolute and end in ChatGPT.app")
 	}
-	if !info.IsDir() {
-		return fmt.Errorf("ChatGPT Desktop path is not an application bundle directory: %s", path)
+	if !filepath.IsAbs(config.ClaudeAppPath) || filepath.Base(config.ClaudeAppPath) != "Claude.app" {
+		return fmt.Errorf("claude application path must be absolute and end in Claude.app")
+	}
+	for _, path := range []string{config.CodexHome, config.ClaudeData, config.CacheDir} {
+		if !filepath.IsAbs(path) {
+			return fmt.Errorf("state and cache paths must be absolute")
+		}
+	}
+	if len(config.Harnesses) == 0 {
+		return fmt.Errorf("at least one harness must be enabled")
 	}
 	return nil
 }
@@ -265,15 +276,21 @@ func renderPlist(config Config, stdout, stderr string) ([]byte, error) {
 	arguments := []string{
 		config.Executable,
 		"run",
-		"--app-path", config.AppPath,
+		"--chatgpt-app-path", config.ChatGPTAppPath,
+		"--claude-app-path", config.ClaudeAppPath,
 		"--codex-home", config.CodexHome,
+		"--claude-data", config.ClaudeData,
 		"--cache-dir", config.CacheDir,
 		"--feed-url", config.FeedURL,
+		"--claude-feed-url", config.ClaudeFeedURL,
 		"--idle-window", config.IdleWindow,
 		"--poll-interval", config.PollInterval,
 		"--activity-poll-interval", config.ActivityPollInterval,
 		"--quit-timeout", config.QuitTimeout,
 		"--launch-timeout", config.LaunchTimeout,
+	}
+	for _, harness := range config.Harnesses {
+		arguments = append(arguments, "--harness", harness)
 	}
 	data := struct {
 		Arguments []string

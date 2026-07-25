@@ -1,0 +1,40 @@
+completed_check_at=2026-07-25T16:27:01Z
+post_bundle_inode=250231443 post_bundle_mtime=1784891182
+post_build=1.24012.9
+post_pid=31861
+--prepared:/Applications/Claude.app/Contents/Frameworks/Claude Helper (GPU).app
+--validated:/Applications/Claude.app/Contents/Frameworks/Claude Helper (GPU).app
+--prepared:/Applications/Claude.app/Contents/Frameworks/ReactiveObjC.framework/Versions/Current/.
+--validated:/Applications/Claude.app/Contents/Frameworks/ReactiveObjC.framework/Versions/Current/.
+--prepared:/Applications/Claude.app/Contents/Frameworks/Claude Helper (Plugin).app
+--prepared:/Applications/Claude.app/Contents/Helpers/chrome-native-host
+--validated:/Applications/Claude.app/Contents/Helpers/chrome-native-host
+--prepared:/Applications/Claude.app/Contents/Helpers/disclaimer
+--validated:/Applications/Claude.app/Contents/Frameworks/Claude Helper (Plugin).app
+--validated:/Applications/Claude.app/Contents/Helpers/disclaimer
+--prepared:/Applications/Claude.app/Contents/Frameworks/Claude Helper.app
+--validated:/Applications/Claude.app/Contents/Frameworks/Claude Helper.app
+--prepared:/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app
+--prepared:/Applications/Claude.app/Contents/Helpers/Claude iOS Sim.app
+--prepared:/Applications/Claude.app/Contents/Frameworks/Squirrel.framework/Versions/Current/.
+--validated:/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app
+--prepared:/Applications/Claude.app/Contents/Frameworks/Mantle.framework/Versions/Current/.
+--validated:/Applications/Claude.app/Contents/Frameworks/Mantle.framework/Versions/Current/.
+--validated:/Applications/Claude.app/Contents/Frameworks/Squirrel.framework/Versions/Current/.
+--prepared:/Applications/Claude.app/Contents/Helpers/Claude iOS Sim.app/Contents/Frameworks/FBSimulatorControl.framework
+--validated:/Applications/Claude.app/Contents/Helpers/Claude iOS Sim.app/Contents/Frameworks/FBSimulatorControl.framework
+--prepared:/Applications/Claude.app/Contents/Helpers/Claude iOS Sim.app/Contents/Frameworks/FBControlCore.framework
+--validated:/Applications/Claude.app/Contents/Helpers/Claude iOS Sim.app/Contents/Frameworks/FBControlCore.framework
+--validated:/Applications/Claude.app/Contents/Helpers/Claude iOS Sim.app
+--prepared:/Applications/Claude.app/Contents/Frameworks/Electron Framework.framework/Versions/Current/.
+--prepared:/Applications/Claude.app/Contents/Frameworks/Electron Framework.framework/Versions/Current/Helpers/chrome_crashpad_handler
+--validated:/Applications/Claude.app/Contents/Frameworks/Electron Framework.framework/Versions/Current/Helpers/chrome_crashpad_handler
+--validated:/Applications/Claude.app/Contents/Frameworks/Electron Framework.framework/Versions/Current/.
+/Applications/Claude.app: valid on disk
+/Applications/Claude.app: satisfies its Designated Requirement
+Executable=/Applications/Claude.app/Contents/MacOS/Claude
+Identifier=com.anthropic.claudefordesktop
+TeamIdentifier=Q6L2SF6YDW
+/Applications/Claude.app: accepted
+source=Notarized Developer ID
+takeover_marker=absent

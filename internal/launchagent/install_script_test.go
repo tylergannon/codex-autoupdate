@@ -111,7 +111,7 @@ func TestInstallerFunctionBodyFailsClosed(t *testing.T) {
 	}
 }
 
-func TestInstallScriptRejectsMissingAppBeforeGoInstall(t *testing.T) {
+func TestInstallScriptAllowsMissingApplications(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	content, err := os.ReadFile(filepath.Join("..", "..", "install.sh"))
@@ -132,18 +132,15 @@ func TestInstallScriptRejectsMissingAppBeforeGoInstall(t *testing.T) {
 	}
 	writeExecutable(t, filepath.Join(fakeBin, "uname"), "#!/bin/bash\nprintf 'Darwin\\n'\n")
 	writeExecutable(t, filepath.Join(fakeBin, "id"), "#!/bin/bash\nprintf 'staff admin\\n'\n")
-	writeExecutable(t, filepath.Join(fakeBin, "go"), "#!/bin/bash\ntouch \"$INSTALL_TEST_LOG/go-ran\"\n")
+	writeExecutable(t, filepath.Join(fakeBin, "go"), "#!/bin/bash\nexit 0\n")
 	harness := filepath.Join(root, "harness.sh")
-	writeExecutable(t, harness, fmt.Sprintf("#!/bin/bash\nset -euo pipefail\nsource %q\nresolve_user_home() { printf '%%s\\n' /unused; }\nmain --app-path %q\n", functionsPath, filepath.Join(root, "missing", "ChatGPT.app")))
+	writeExecutable(t, harness, fmt.Sprintf("#!/bin/bash\nset -euo pipefail\nsource %q\npreflight --app-path %q --claude-app-path %q\n", functionsPath, filepath.Join(root, "missing", "ChatGPT.app"), filepath.Join(root, "missing", "Claude.app")))
 
 	command := exec.Command("/bin/bash", harness)
 	command.Env = append(os.Environ(), "PATH="+fakeBin+":/usr/bin:/bin", "INSTALL_TEST_LOG="+root)
 	output, err := command.CombinedOutput()
-	if err == nil || !strings.Contains(string(output), "ChatGPT Desktop is not installed") {
-		t.Fatalf("expected missing-app preflight failure, got %v:\n%s", err, output)
-	}
-	if _, err := os.Stat(filepath.Join(root, "go-ran")); !os.IsNotExist(err) {
-		t.Fatalf("go install ran after failed preflight: %v", err)
+	if err != nil {
+		t.Fatalf("missing applications should not fail preflight: %v:\n%s", err, output)
 	}
 }
 

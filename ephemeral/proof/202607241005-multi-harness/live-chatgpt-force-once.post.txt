@@ -1,0 +1,41 @@
+completed_check_at=2026-07-25T16:25:07Z
+post_bundle_inode=250207281 post_bundle_mtime=1782268557
+post_build=5848
+post_pid=30279
+--prepared:/Applications/ChatGPT.app/Contents/PlugIns/CodexDockTilePlugin.plugin
+--validated:/Applications/ChatGPT.app/Contents/PlugIns/CodexDockTilePlugin.plugin
+--prepared:/Applications/ChatGPT.app/Contents/Frameworks/Sparkle.framework/Versions/Current/.
+--prepared:/Applications/ChatGPT.app/Contents/Frameworks/Sparkle.framework/Versions/Current/Updater.app
+--validated:/Applications/ChatGPT.app/Contents/Frameworks/Sparkle.framework/Versions/Current/Updater.app
+--prepared:/Applications/ChatGPT.app/Contents/Frameworks/Sparkle.framework/Versions/Current/XPCServices/Downloader.xpc
+--validated:/Applications/ChatGPT.app/Contents/Frameworks/Sparkle.framework/Versions/Current/XPCServices/Downloader.xpc
+--prepared:/Applications/ChatGPT.app/Contents/Frameworks/Sparkle.framework/Versions/Current/XPCServices/Installer.xpc
+--prepared:/Applications/ChatGPT.app/Contents/Frameworks/Sparkle.framework/Versions/Current/Autoupdate
+--validated:/Applications/ChatGPT.app/Contents/Frameworks/Sparkle.framework/Versions/Current/Autoupdate
+--validated:/Applications/ChatGPT.app/Contents/Frameworks/Sparkle.framework/Versions/Current/XPCServices/Installer.xpc
+--validated:/Applications/ChatGPT.app/Contents/Frameworks/Sparkle.framework/Versions/Current/.
+--prepared:/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/.
+--prepared:/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/Helpers/web_app_shortcut_copier
+--validated:/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/Helpers/web_app_shortcut_copier
+--prepared:/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/Helpers/Codex (GPU).app
+--validated:/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/Helpers/Codex (GPU).app
+--prepared:/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/Helpers/browser_crashpad_handler
+--validated:/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/Helpers/browser_crashpad_handler
+--prepared:/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/Helpers/Codex (Service).app
+--validated:/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/Helpers/Codex (Service).app
+--prepared:/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/Helpers/Codex (Alerts).app
+--prepared:/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/Helpers/Codex (Renderer).app
+--validated:/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/Helpers/Codex (Renderer).app
+--validated:/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/Helpers/Codex (Alerts).app
+--prepared:/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/Helpers/app_mode_loader
+--validated:/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/Helpers/app_mode_loader
+--validated:/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/.
+/Applications/ChatGPT.app: valid on disk
+/Applications/ChatGPT.app: satisfies its Designated Requirement
+Executable=/Applications/ChatGPT.app/Contents/MacOS/ChatGPT
+Identifier=com.openai.codex
+TeamIdentifier=2DC432GLL2
+/Applications/ChatGPT.app: accepted
+source=Notarized Developer ID
+daemon_state=spawn
+takeover_marker=absent

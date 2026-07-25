@@ -1,4 +1,11 @@
-# Getting started
+# codex-autoupdate
+
+`codex-autoupdate` is a headless macOS user LaunchAgent that safely updates
+ChatGPT Desktop and Claude Desktop after their coding-agent work becomes idle.
+Both harnesses are enabled by default; applications that are not installed are
+skipped.
+
+## Install
 
 Paste this into Codex:
 
@@ -12,10 +19,34 @@ Or install directly:
 curl -fsSL https://raw.githubusercontent.com/tylergannon/codex-autoupdate/main/install.sh | bash
 ```
 
-`codex-autoupdate` is a macOS user LaunchAgent that watches OpenAI's stable ChatGPT Desktop appcast. When a newer build is available, it waits until Desktop-managed Codex tasks have been idle for five uninterrupted minutes, then verifies, replaces, and restarts `ChatGPT.app`.
+Requirements: macOS, Go, and a logged-in administrator account. At least one of
+ChatGPT Desktop or Claude Desktop is useful but neither must be present during
+LaunchAgent installation.
 
-Requirements: macOS, Go, ChatGPT Desktop, and a logged-in administrator account. The watcher first asks ChatGPT to quit normally. If a scheduled-task warning refuses that request after the idle checks pass, it sends `SIGTERM` to the exact ChatGPT main process; it never sends `SIGKILL`. It rolls back an update that does not become ready.
+## Operate
 
-The installer always selects the latest tagged release.
+```sh
+binary="$HOME/Library/Application Support/codex-autoupdate/codex-autoupdate"
+"$binary" check --json
+"$binary" run --once
+"$binary" update --force
+"$binary" update --force --harness claude
+```
 
-See [llms.txt](llms.txt) for configuration, status, upgrade, uninstall, and recovery instructions.
+`update --force` safely reinstalls the latest official release when it equals
+the installed version. It never permits downgrade and retains activity,
+signature, identity, readiness, rollback, and quarantine checks.
+When the installed LaunchAgent owns the coordinator lock, a one-shot command
+requests a cooperative handoff. The watcher finishes its current safe step,
+yields the same lock, and launchd resumes it after the command; no second cache
+or competing coordinator is used. A concurrent second one-shot command exits
+without signaling the one-shot that already owns the lock.
+
+Each harness has its own idle window. Open windows, ordinary chat use, dormant
+sessions, and future schedules do not block replacement; currently executing
+Codex, Claude Code, or Claude Cowork work does. Once idle, the updater asks the
+application to quit. If quit is refused, it re-resolves the exact main process
+and sends `SIGTERM`; it never sends `SIGKILL`.
+
+See [llms.txt](llms.txt) for configuration, LaunchAgent operation, verification,
+and recovery.

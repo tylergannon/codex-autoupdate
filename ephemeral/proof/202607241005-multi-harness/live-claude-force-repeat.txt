@@ -1,0 +1,24 @@
+command:
+  installed codex-autoupdate update --force --harness claude
+  idle-window=1s activity-poll-interval=1s quit-timeout=3s launch-timeout=90s
+
+pre_inode=250231443
+pre_build=1.24012.9
+pre_pid=43514
+
+time=2026-07-25T11:13:15.420-06:00 level=INFO msg="application replacement available" harness=claude installed_build=1.24012.9 available_build=1.24012.9 version=1.24012.9 forced=true
+time=2026-07-25T11:13:32.714-06:00 level=INFO msg="update staged and verified" harness="Claude Desktop" build=1.24012.9 version=1.24012.9 path=/Applications/.Claude.app.codex-autoupdate-1_24012_9.new
+time=2026-07-25T11:13:41.735-06:00 level=INFO msg="requesting graceful application shutdown" harness="Claude Desktop" pid=43514
+time=2026-07-25T11:13:44.793-06:00 level=INFO msg="application update completed" harness="Claude Desktop" old_build=1.24012.9 new_build=1.24012.9 version=1.24012.9
+time=2026-07-25T11:13:44.793-06:00 level=INFO msg="watch cycle installed an application replacement" harness=claude forced=true
+
+update_exit=0
+post_inode=250325489
+post_build=1.24012.9
+post_pid=59361
+codesign_exit=0
+Identifier=com.anthropic.claudefordesktop
+TeamIdentifier=Q6L2SF6YDW
+Gatekeeper=accepted
+Gatekeeper_source=Notarized Developer ID
+gatekeeper_exit=0

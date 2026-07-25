@@ -31,7 +31,7 @@ func TestLatestSelectsHighestCompatibleBuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if release.Build != 12 || release.Version != "1.2" || release.Length != 12 {
+	if release.Build != "12" || release.Version != "1.2" || release.Length != 12 {
 		t.Fatalf("unexpected release: %+v", release)
 	}
 }
