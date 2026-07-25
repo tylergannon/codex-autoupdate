@@ -115,9 +115,19 @@ passed strict signature and Gatekeeper checks. Its transcript is:
 - `live-claude-force-repeat.txt`
 
 The automated force test also invokes two consecutive successful equal-version
-passes against the same watcher and installer state. A second successful live
-ChatGPT transcript is recorded separately below once the active proof-producing
-Codex task has safely become idle.
+passes against the same watcher and installer state.
+
+A second successful ChatGPT pass used the installed `dev-f23b1a4` binary. It
+staged and verified equal build 5848, visibly deferred while this proof-producing
+Codex task was active, then replaced the app after the task became idle. The
+bundle inode changed from `250257054` to `250444125`, PID 45530 became PID
+63770, the one-shot exited zero, and the installed result again passed strict
+signature and Gatekeeper checks. Its cross-restart transcript is:
+
+- `live-chatgpt-force-repeat.txt`
+
+Together with the original transcripts, this preserves two successful live
+equal-version forced replacements for each application.
 
 ## Live rollback behavior
 

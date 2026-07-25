@@ -1,0 +1,52 @@
+command:
+  installed codex-autoupdate update --force --harness chatgpt
+  idle-window=3s activity-poll-interval=1s quit-timeout=3s launch-timeout=90s
+
+proof_started=2026-07-25T17:17:17Z
+installed_updater=codex-autoupdate version dev-f23b1a4
+pre_inode=250257054
+pre_build=5848
+pre_pid=45530
+time=2026-07-25T11:17:18.157-06:00 level=INFO msg="application replacement available" harness=chatgpt installed_build=5848 available_build=5848 version=26.721.41059 forced=true
+time=2026-07-25T11:17:46.017-06:00 level=INFO msg="update staged and verified" harness="ChatGPT Desktop" build=5848 version=26.721.41059 path=/Applications/.ChatGPT.app.codex-autoupdate-5848.new
+time=2026-07-25T11:17:47.742-06:00 level=INFO msg="waiting for active work to finish" harness=chatgpt work=[019f94b2-62d0-76f0-a76b-004e2b52bf47]
+time=2026-07-25T11:17:48.993-06:00 level=INFO msg="waiting for active work to finish" harness=chatgpt work=[019f94b2-62d0-76f0-a76b-004e2b52bf47]
+
+The proof LaunchAgent reported `last exit code = 0`, then (because the temporary
+submit job was inadvertently persistent) began a second invocation at
+2026-07-25T17:21:04Z. That second invocation's preflight captured the completed
+first invocation's post-state before it was stopped:
+
+post_inode=250444125
+post_bundle_change=2026-07-25T11:21:00-0600
+post_build=5848
+post_pid=63770
+codesign_exit=0
+Identifier=com.openai.codex
+TeamIdentifier=2DC432GLL2
+Gatekeeper=accepted
+Gatekeeper_source=Notarized Developer ID
+gatekeeper_exit=0
+
+The temporary proof job was removed before its unintended second invocation
+could activate another replacement. The installed daemon was then bootstrapped
+from its normal plist and is running the installed `dev-f23b1a4` binary.
+time=2026-07-25T11:21:32.310-06:00 level=INFO msg="update staged and verified" harness="ChatGPT Desktop" build=5848 version=26.721.41059 path=/Applications/.ChatGPT.app.codex-autoupdate-5848.new
+time=2026-07-25T11:21:34.061-06:00 level=INFO msg="waiting for active work to finish" harness=chatgpt work=[019f94b2-62d0-76f0-a76b-004e2b52bf47]
+time=2026-07-25T11:21:35.325-06:00 level=INFO msg="waiting for active work to finish" harness=chatgpt work=[019f94b2-62d0-76f0-a76b-004e2b52bf47]
+time=2026-07-25T11:21:36.539-06:00 level=INFO msg="waiting for active work to finish" harness=chatgpt work=[019f94b2-62d0-76f0-a76b-004e2b52bf47]
+time=2026-07-25T11:21:37.785-06:00 level=INFO msg="waiting for active work to finish" harness=chatgpt work=[019f94b2-62d0-76f0-a76b-004e2b52bf47]
+time=2026-07-25T11:21:38.999-06:00 level=INFO msg="waiting for active work to finish" harness=chatgpt work=[019f94b2-62d0-76f0-a76b-004e2b52bf47]
+time=2026-07-25T11:21:40.214-06:00 level=INFO msg="waiting for active work to finish" harness=chatgpt work=[019f94b2-62d0-76f0-a76b-004e2b52bf47]
+time=2026-07-25T11:21:41.429-06:00 level=INFO msg="waiting for active work to finish" harness=chatgpt work=[019f94b2-62d0-76f0-a76b-004e2b52bf47]
+time=2026-07-25T11:21:42.640-06:00 level=INFO msg="waiting for active work to finish" harness=chatgpt work=[019f94b2-62d0-76f0-a76b-004e2b52bf47]
+time=2026-07-25T11:21:43.852-06:00 level=INFO msg="waiting for active work to finish" harness=chatgpt work=[019f94b2-62d0-76f0-a76b-004e2b52bf47]
+time=2026-07-25T11:21:45.106-06:00 level=INFO msg="waiting for active work to finish" harness=chatgpt work=[019f94b2-62d0-76f0-a76b-004e2b52bf47]
+time=2026-07-25T11:21:46.340-06:00 level=INFO msg="waiting for active work to finish" harness=chatgpt work=[019f94b2-62d0-76f0-a76b-004e2b52bf47]
+time=2026-07-25T11:21:47.584-06:00 level=INFO msg="waiting for active work to finish" harness=chatgpt work=[019f94b2-62d0-76f0-a76b-004e2b52bf47]
+time=2026-07-25T11:21:48.797-06:00 level=INFO msg="waiting for active work to finish" harness=chatgpt work=[019f94b2-62d0-76f0-a76b-004e2b52bf47]
+time=2026-07-25T11:21:50.013-06:00 level=INFO msg="waiting for active work to finish" harness=chatgpt work=[019f94b2-62d0-76f0-a76b-004e2b52bf47]
+time=2026-07-25T11:21:51.265-06:00 level=INFO msg="waiting for active work to finish" harness=chatgpt work=[019f94b2-62d0-76f0-a76b-004e2b52bf47]
+time=2026-07-25T11:21:52.514-06:00 level=INFO msg="waiting for active work to finish" harness=chatgpt work=[019f94b2-62d0-76f0-a76b-004e2b52bf47]
+time=2026-07-25T11:21:53.763-06:00 level=INFO msg="waiting for active work to finish" harness=chatgpt work=[019f94b2-62d0-76f0-a76b-004e2b52bf47]
+time=2026-07-25T11:21:55.003-06:00 level=INFO msg="waiting for active work to finish" harness=chatgpt work=[019f94b2-62d0-76f0-a76b-004e2b52bf47]
