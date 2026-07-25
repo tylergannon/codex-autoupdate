@@ -1,8 +1,7 @@
 # Multi-harness remediation proof
 
-Proof head: `f8eadec` plus the proof/test-only follow-up containing this file.
-Status: in progress; completion is not claimed while live activation evidence
-listed under "Remaining" is absent.
+Proof head: the commit containing this file.
+Status: complete for the observable runtime claims in the multi-harness plan.
 
 ## Cooperative one-shot takeover
 
@@ -68,7 +67,68 @@ Claude build=1.24012.9 bundle=com.anthropic.claudefordesktop team=Q6L2SF6YDW
 Claude strict codesign=valid Gatekeeper="Notarized Developer ID"
 ```
 
-## Rollback behavior
+## Live forced replacement
+
+The installed `dev-f8eadec` binary ran equal-version forced reinstallations
+against both real applications.
+
+ChatGPT build 5848 was replaced by another verified build 5848. The original
+bundle inode `250180315` became `250207281`, the main process changed from PID
+28608 to PID 30279, and the relaunched application passed strict signature,
+team `2DC432GLL2`, and Gatekeeper checks. Graceful quit timed out, so the
+updater re-resolved exact PID 28608, sent `SIGTERM`, confirmed exit, and
+continued without `SIGKILL`.
+
+Claude build 1.24012.9 was replaced by another verified build 1.24012.9. The
+bundle inode changed from `250225566` to `250231443`, the main process changed
+from PID 31105 to PID 31861, and the relaunched application passed strict
+signature, team `Q6L2SF6YDW`, and Gatekeeper checks.
+
+The raw before, updater, and after records are:
+
+- `live-chatgpt-force-once.pre.txt`
+- `live-chatgpt-force-once.log`
+- `live-chatgpt-force-once.post.txt`
+- `live-claude-force.pre.txt`
+- `live-claude-force.log`
+- `live-claude-force.post.txt`
+
+Additional equal-version passes also completed successfully for both
+applications, demonstrating that repeated `--force` use remains operational.
+
+## Live rollback behavior
+
+Both controlled failures ran against the real `/Applications` installation,
+not a disposable application copy.
+
+For Claude, the proof terminated only the newly launched replacement PID 36217.
+Readiness timed out after three seconds, the updater restored the original
+bundle inode `250231443`, relaunched it as PID 36270, wrote the per-version
+quarantine record, and left no backup residue. The restored app passed strict
+signature, team, and Gatekeeper checks.
+
+For ChatGPT, the fault injector removed execute permission from only the
+activated replacement bundle (inode `250286216`). Launch failed, the updater
+restored the original bundle inode `250257054`, relaunched it as PID 45530,
+wrote the per-version quarantine record, and left no backup residue. The
+restored app passed strict signature, team, and Gatekeeper checks.
+
+The proof quarantine records were inspected and then removed so the installed
+watcher was not left suppressing an otherwise valid current release. The
+failed staged bundles and temporary proof LaunchAgents were also removed.
+
+The raw rollback records are:
+
+- `live-claude-rollback.pre.txt`
+- `live-claude-rollback-fault.log`
+- `live-claude-rollback.log`
+- `live-claude-rollback.post.txt`
+- `live-chatgpt-rollback2.pre.txt`
+- `live-chatgpt-rollback2-fault.log`
+- `live-chatgpt-rollback2.log`
+- `live-chatgpt-rollback2.post.txt`
+
+## Automated rollback behavior
 
 The focused macOS installer integration tests use real temporary bundle
 directories and atomic filesystem renames while replacing macOS process/signing
@@ -94,14 +154,3 @@ go vet ./...                       PASS
 golangci-lint run ./...            0 issues
 bash -n install.sh                 PASS
 ```
-
-## Remaining
-
-- Observe the staged ChatGPT build 5848 replace build 5828, relaunch, and pass
-  signed readiness after the current Codex task becomes idle.
-- Resolve or explicitly preserve the two live Claude task processes, then
-  observe Claude build 1.24012.9 replace 1.24012.1 and pass signed readiness.
-- Run a second equal-version forced reinstall for each application through the
-  installed one-shot command.
-- A real installed-app readiness failure is not yet induced; the controlled
-  rollback proof above is at the installer integration boundary.

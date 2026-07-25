@@ -1,0 +1,6 @@
+time=2026-07-25T10:22:57.150-06:00 level=INFO msg="application replacement available" harness=chatgpt installed_build=5848 available_build=5848 version=26.721.41059 forced=true
+time=2026-07-25T10:23:56.588-06:00 level=INFO msg="update staged and verified" harness="ChatGPT Desktop" build=5848 version=26.721.41059 path=/Applications/.ChatGPT.app.codex-autoupdate-5848.new
+time=2026-07-25T10:24:16.092-06:00 level=INFO msg="requesting graceful application shutdown" harness="ChatGPT Desktop" pid=28608
+time=2026-07-25T10:24:46.940-06:00 level=WARN msg="graceful application shutdown did not stop the application; sending SIGTERM" harness="ChatGPT Desktop" pid=28608 error="ChatGPT Desktop did not exit within 30s; update aborted"
+time=2026-07-25T10:24:54.452-06:00 level=INFO msg="application update completed" harness="ChatGPT Desktop" old_build=5848 new_build=5848 version=26.721.41059
+time=2026-07-25T10:24:54.453-06:00 level=INFO msg="watch cycle installed an application replacement" harness=chatgpt forced=true

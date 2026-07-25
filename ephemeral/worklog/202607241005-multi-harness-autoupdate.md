@@ -15,3 +15,8 @@ review: Live process inspection found Claude Code-launched task PIDs 17911 and 1
 decision: Claude activity combines Desktop session identifiers, standalone Claude Code processes, and live standard streams under the per-user Claude task root; dormant metadata alone remains idle.
 review: Rollback discarded failed-replacement shutdown errors and could restore files while the new process survived.
 decision: Activation and rollback now share the same graceful-quit, exact-PID `SIGTERM`, and confirmed-process-absence path; rollback does not move bundles if shutdown fails.
+correction: When the user explicitly authorizes destructive live proof, exercise and repair the real installation directly; do not invent disposable-copy scaffolding to avoid a failure the rollback contract is supposed to handle.
+friction: Detached proof jobs from an interrupted turn later contended for the coordinator lock -> inventory and reconcile exact background proof processes before launching another one-shot command.
+review: A configured Claude app-path override caused the canonical Claude Desktop executable and helpers to be parsed as standalone Claude Code because their paths contain spaces.
+decision: Claude CLI detection now excludes processes launched from any `Claude.app/Contents` bundle before tokenizing command text.
+decision: Live equal-version force replacement and controlled rollback completed against both real applications; pre/post inodes, PIDs, quarantine, strict signatures, signing teams, Gatekeeper acceptance, and residue cleanup were recorded.

@@ -129,6 +129,10 @@ func (d ClaudeDetector) Detect(ctx context.Context) (Report, error) {
 }
 
 func isClaudeCodeProcess(command string) bool {
+	command = strings.TrimSpace(command)
+	if strings.HasPrefix(command, "/") && strings.Contains(command, "/Claude.app/Contents/") {
+		return false
+	}
 	fields := strings.Fields(command)
 	if len(fields) == 0 {
 		return false

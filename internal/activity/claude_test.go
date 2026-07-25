@@ -121,6 +121,29 @@ func TestClaudeDetectorDoesNotTreatDesktopHelpersAsClaudeCode(t *testing.T) {
 	}
 }
 
+func TestClaudeDetectorExcludesDesktopProcessesOutsideConfiguredAppPath(t *testing.T) {
+	t.Parallel()
+	started := time.Now().Add(-time.Hour)
+	report, err := (ClaudeDetector{
+		AppPath:    "/Applications/Proof/Claude.app",
+		ClaudeData: t.TempDir(),
+		TaskRoot:   t.TempDir(),
+		Processes: claudeProcesses{
+			processes: []macos.Process{
+				{PID: 10, Started: started, Command: "/Applications/Claude.app/Contents/MacOS/Claude"},
+				{PID: 11, Started: started, Command: "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper --type=gpu-process"},
+				{PID: 12, Started: started, Command: "/Users/test/.local/bin/claude --print task"},
+			},
+		},
+	}).Detect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprint(report.ActiveThreads); got != "[claude-code-pid:12]" {
+		t.Fatalf("active processes = %s, want only standalone Claude Code", got)
+	}
+}
+
 func TestClaudeDetectorRejectsUnreadableSessionState(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

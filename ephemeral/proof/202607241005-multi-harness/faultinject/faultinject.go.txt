@@ -1,0 +1,56 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"strconv"
+	"syscall"
+	"time"
+)
+
+func main() {
+	if len(os.Args) != 4 {
+		fmt.Fprintln(os.Stderr, "usage: faultinject APP_PATH EXECUTABLE OLD_PID")
+		os.Exit(2)
+	}
+	appPath := os.Args[1]
+	executable := os.Args[2]
+	oldPID, err := strconv.Atoi(os.Args[3])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	info, err := os.Lstat(appPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	oldInode := info.Sys().(*syscall.Stat_t).Ino
+	fmt.Printf("watching_pre_pid=%d pre_inode=%d\n", oldPID, oldInode)
+
+	deadline := time.Now().Add(3 * time.Minute)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(oldPID, 0); err == syscall.ESRCH {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if time.Now().After(deadline) {
+		fmt.Println("fault_injector_timeout_waiting_for_old_pid=true")
+		os.Exit(1)
+	}
+
+	for time.Now().Before(deadline) {
+		info, err := os.Lstat(appPath)
+		if err == nil && info.Sys().(*syscall.Stat_t).Ino != oldInode {
+			if err := os.Chmod(executable, 0o644); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			fmt.Printf("fault_disabled_replacement_executable inode=%d\n", info.Sys().(*syscall.Stat_t).Ino)
+			return
+		}
+	}
+	fmt.Println("fault_injector_timeout_waiting_for_replacement=true")
+	os.Exit(1)
+}

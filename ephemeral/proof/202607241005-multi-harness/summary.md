@@ -5,8 +5,8 @@ Head under proof: the commit containing this file.
 > This initial proof did not satisfy the requested definition of done. It did
 > not preserve auditable command evidence, used a separate cache to bypass the
 > installed watcher lock, did not replace ChatGPT, and did not exercise live
-> rollback. See `remediation.md` for the corrected evidence and explicit
-> remaining work. Do not use this file as completion evidence.
+> rollback. See `remediation.md` for the completed corrected evidence. Do not
+> use this file as completion evidence.
 
 ## Observable claims
 
