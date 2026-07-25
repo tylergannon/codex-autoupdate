@@ -160,7 +160,7 @@ func (s settings) run(command *cobra.Command, once, force bool) (resultErr error
 		takeoverErr := takeover.Close()
 		resultErr = errors.Join(resultErr, closeErr, takeoverErr)
 	}()
-	watchers, err := s.watchers(logger)
+	watchers, err := s.watchers(command.Context(), logger)
 	if err != nil {
 		return err
 	}
@@ -211,7 +211,11 @@ func acquireRunLock(ctx context.Context, cacheDir string, oneShot bool, wake fun
 			return nil, nil, runlock.ErrYieldRequested
 		}
 	}
-	lock, err := runlock.Acquire(cacheDir)
+	acquire := runlock.Acquire
+	if !oneShot {
+		acquire = runlock.AcquireDaemon
+	}
+	lock, err := acquire(cacheDir)
 	if err == nil || !oneShot || !errors.Is(err, runlock.ErrAlreadyRunning) {
 		return lock, nil, err
 	}
@@ -464,23 +468,13 @@ func (s settings) targets() ([]target, error) {
 	return targets, nil
 }
 
-func (s settings) watchers(logger *slog.Logger) ([]*watch.Watcher, error) {
+func (s settings) watchers(ctx context.Context, logger *slog.Logger) ([]*watch.Watcher, error) {
 	targets, err := s.targets()
 	if err != nil {
 		return nil, err
 	}
 	var result []*watch.Watcher
 	for _, target := range targets {
-		info, err := os.Lstat(target.appPath)
-		if os.IsNotExist(err) {
-			continue
-		}
-		if err != nil {
-			return nil, fmt.Errorf("inspect %s path: %w", target.name, err)
-		}
-		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return nil, fmt.Errorf("%s path must be a non-symbolic-link application bundle directory: %s", target.name, target.appPath)
-		}
 		installer := &update.Installer{
 			AppPath:       target.appPath,
 			CacheDir:      filepath.Join(s.cacheDir, target.id),
@@ -492,6 +486,23 @@ func (s settings) watchers(logger *slog.Logger) ([]*watch.Watcher, error) {
 			Processes:     target.processes,
 			Logger:        logger,
 			Identity:      target.identity,
+		}
+		info, err := os.Lstat(target.appPath)
+		if os.IsNotExist(err) {
+			recovered, recoveryErr := installer.RecoverInterruptedActivation(ctx)
+			if recoveryErr != nil {
+				return nil, recoveryErr
+			}
+			if !recovered {
+				continue
+			}
+			info, err = os.Lstat(target.appPath)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("inspect %s path: %w", target.name, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return nil, fmt.Errorf("%s path must be a non-symbolic-link application bundle directory: %s", target.name, target.appPath)
 		}
 		result = append(result, &watch.Watcher{
 			ID:                   target.id,

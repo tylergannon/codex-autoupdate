@@ -47,6 +47,47 @@ type failureRecord struct {
 	Error    string    `json:"error"`
 }
 
+func (i *Installer) RecoverInterruptedActivation(ctx context.Context) (bool, error) {
+	if !filepath.IsAbs(i.AppPath) || filepath.Base(i.AppPath) != i.identity().Executable+".app" {
+		return false, fmt.Errorf("app path must be an absolute path ending in %s.app", i.identity().Executable)
+	}
+	info, err := os.Lstat(i.AppPath)
+	if err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return false, fmt.Errorf("app path must be a non-symbolic-link application bundle directory: %s", i.AppPath)
+		}
+		return false, nil
+	}
+	if !os.IsNotExist(err) {
+		return false, fmt.Errorf("inspect installed app path for recovery: %w", err)
+	}
+	parent := filepath.Dir(i.AppPath)
+	pattern := filepath.Join(parent, "."+filepath.Base(i.AppPath)+".codex-autoupdate-backup-*")
+	backups, err := filepath.Glob(pattern)
+	if err != nil {
+		return false, fmt.Errorf("find interrupted activation backup: %w", err)
+	}
+	if len(backups) == 0 {
+		return false, nil
+	}
+	if len(backups) != 1 {
+		return false, fmt.Errorf("cannot recover missing %s: found %d rollback bundles matching %s", i.identity().Name, len(backups), pattern)
+	}
+	backup := backups[0]
+	bundle, err := i.inspector().Inspect(ctx, backup, true)
+	if err != nil {
+		return false, fmt.Errorf("verify interrupted activation backup %s: %w", backup, err)
+	}
+	if err := os.Rename(backup, i.AppPath); err != nil {
+		return false, fmt.Errorf("restore interrupted activation backup %s: %w", backup, err)
+	}
+	i.logger().Warn("restored application after interrupted activation", "harness", i.identity().Name, "build", bundle.Build, "backup", backup)
+	if err := i.launchAndWait(ctx, bundle.Build); err != nil {
+		return true, fmt.Errorf("relaunch recovered %s: %w", i.identity().Name, err)
+	}
+	return true, nil
+}
+
 func (i *Installer) Prepare(ctx context.Context, candidate release.Release) (Prepared, error) {
 	if err := i.validate(); err != nil {
 		return Prepared{}, err

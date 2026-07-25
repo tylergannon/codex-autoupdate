@@ -54,6 +54,8 @@ type Watcher struct {
 	Sleep                  func(context.Context, time.Duration) error
 	prepared               *update.Prepared
 	preparedInstalledBuild string
+	observedActive         bool
+	idleSince              time.Time
 }
 
 func (w *Watcher) Run(ctx context.Context, once bool) error {
@@ -118,14 +120,15 @@ func (w *Watcher) Step(ctx context.Context, force bool) (State, error) {
 		return Pending, fmt.Errorf("inspect %s activity: %w", w.name(), err)
 	}
 	w.logWarnings(report)
+	idleSince := w.observeActivity(report)
 	if report.Active() {
 		w.logger().Info("waiting for active work to finish", "harness", w.id(), "work", report.ActiveThreads)
 		return Pending, nil
 	}
-	if !report.LastLifecycle.IsZero() {
-		remaining := w.IdleWindow - w.now().Sub(report.LastLifecycle)
+	if !idleSince.IsZero() {
+		remaining := w.IdleWindow - w.now().Sub(idleSince)
 		if remaining > 0 {
-			w.logger().Info("waiting for uninterrupted idle window", "harness", w.id(), "idle_since", report.LastLifecycle.Format(time.RFC3339), "remaining", remaining.Round(time.Second))
+			w.logger().Info("waiting for uninterrupted idle window", "harness", w.id(), "idle_since", idleSince.Format(time.RFC3339), "remaining", remaining.Round(time.Second))
 			return Pending, nil
 		}
 	}
@@ -155,11 +158,12 @@ func (w *Watcher) Step(ctx context.Context, force bool) (State, error) {
 			return err
 		}
 		w.logWarnings(report)
+		idleSince := w.observeActivity(report)
 		if report.Active() {
 			return fmt.Errorf("work became active: %v", report.ActiveThreads)
 		}
-		if !report.LastLifecycle.IsZero() && w.now().Sub(report.LastLifecycle) < w.IdleWindow {
-			return fmt.Errorf("idle window restarted at %s", report.LastLifecycle.Format(time.RFC3339))
+		if !idleSince.IsZero() && w.now().Sub(idleSince) < w.IdleWindow {
+			return fmt.Errorf("idle window restarted at %s", idleSince.Format(time.RFC3339))
 		}
 		current, err := w.Inspector.Inspect(ctx, w.AppPath, false)
 		if err != nil {
@@ -187,6 +191,22 @@ func (w *Watcher) logWarnings(report activity.Report) {
 	for _, warning := range report.Warnings {
 		w.logger().Warn("activity record was skipped", "harness", w.id(), "warning", warning)
 	}
+}
+
+func (w *Watcher) observeActivity(report activity.Report) time.Time {
+	if report.Active() {
+		w.observedActive = true
+		w.idleSince = time.Time{}
+		return time.Time{}
+	}
+	if w.observedActive {
+		w.observedActive = false
+		w.idleSince = w.now()
+	}
+	if report.LastLifecycle.After(w.idleSince) {
+		return report.LastLifecycle
+	}
+	return w.idleSince
 }
 
 func (w *Watcher) validate() error {

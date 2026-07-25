@@ -73,7 +73,9 @@ The installed watcher normally owns the shared coordinator lock. A one-shot
 command writes a per-cache takeover request and wakes the watcher; the watcher
 yields only after its current coordinator step is safe. The one-shot then uses
 the same lock and cache. Launchd resumes the watcher after the request is
-removed. Do not work around lock contention with a second `--cache-dir`.
+removed. A second one-shot command never signals the first one-shot and instead
+exits with a contention error. Do not work around lock contention with a second
+`--cache-dir`.
 
 Uninstall with:
 
@@ -124,7 +126,11 @@ quarantined separately under:
 
 A newer version remains eligible. Remove a marker only when deliberately
 retrying that same version. Staging, residue, rollback, and quarantine state is
-partitioned by harness.
+partitioned by harness. If the updater or machine stops after moving the prior
+bundle but before activating its replacement, the next watcher start verifies
+the single retained rollback bundle, restores it to the canonical path, and
+relaunches it. Multiple possible rollback bundles fail closed for manual
+inspection.
 
 Repository proof and operator notes are under
 `ephemeral/projects/codex-autoupdate/`.

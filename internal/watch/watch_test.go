@@ -223,6 +223,37 @@ func TestWatcherWaitsForContinuousIdleAndRechecksBeforeApply(t *testing.T) {
 	}
 }
 
+func TestWatcherStartsIdleWindowWhenProcessOnlyActivityDisappears(t *testing.T) {
+	t.Parallel()
+	clock := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
+	inspector := &fakeInspector{build: "1"}
+	installer := &fakeInstaller{inspector: inspector}
+	watcher := testWatcher(inspector, installer, fakeFeed{release: appcast.Release{Build: "2"}})
+	watcher.IdleWindow = 2 * time.Minute
+	watcher.ActivityPollInterval = time.Minute
+	watcher.Activity = &sequenceActivity{reports: []activity.Report{
+		{ActiveThreads: []string{"claude-code-pid:42"}},
+		{},
+		{},
+		{},
+	}}
+	watcher.Now = func() time.Time { return clock }
+	watcher.Sleep = func(_ context.Context, duration time.Duration) error {
+		clock = clock.Add(duration)
+		return nil
+	}
+	if err := watcher.Run(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	if !installer.applied {
+		t.Fatal("replacement was not applied")
+	}
+	want := time.Date(2026, 7, 25, 12, 3, 0, 0, time.UTC)
+	if !clock.Equal(want) {
+		t.Fatalf("replacement applied at %s, want %s after a fresh idle window", clock, want)
+	}
+}
+
 func TestWatcherDoesNothingWhenCurrent(t *testing.T) {
 	t.Parallel()
 	inspector := &fakeInspector{build: "2"}

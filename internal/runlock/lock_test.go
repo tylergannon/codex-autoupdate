@@ -9,7 +9,7 @@ import (
 func TestTakeoverRequestWakesHolderAndPersistsUntilClosed(t *testing.T) {
 	t.Parallel()
 	directory := t.TempDir()
-	lock, err := Acquire(directory)
+	lock, err := AcquireDaemon(directory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,6 +41,31 @@ func TestTakeoverRequestWakesHolderAndPersistsUntilClosed(t *testing.T) {
 	}
 	if requested {
 		t.Fatal("closed takeover request remained visible")
+	}
+}
+
+func TestTakeoverDoesNotSignalOneShotHolder(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	lock, err := Acquire(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lock.Close() }()
+	signaled := false
+	request, err := RequestTakeover(directory, func(int) error {
+		signaled = true
+		return nil
+	})
+	if err == nil {
+		_ = request.Close()
+		t.Fatal("expected one-shot contention error")
+	}
+	if signaled {
+		t.Fatal("one-shot holder received takeover signal")
+	}
+	if _, statErr := os.Stat(filepath.Join(directory, takeoverName)); !os.IsNotExist(statErr) {
+		t.Fatalf("one-shot contention created takeover marker: %v", statErr)
 	}
 }
 

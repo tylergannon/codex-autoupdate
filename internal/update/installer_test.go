@@ -100,6 +100,60 @@ func TestApplyAtomicallyReplacesAndWaitsForApplication(t *testing.T) {
 	}
 }
 
+func TestRecoverInterruptedActivationRestoresAndRelaunchesBackup(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	appPath := filepath.Join(root, "ChatGPT.app")
+	backupPath := filepath.Join(root, ".ChatGPT.app.codex-autoupdate-backup-1-123")
+	writeFakeBundle(t, backupPath, "1.0", 1)
+	runner := &fixtureRunner{appPath: appPath}
+	installer := Installer{
+		AppPath:       appPath,
+		CacheDir:      filepath.Join(root, "cache"),
+		QuitTimeout:   time.Second,
+		LaunchTimeout: time.Second,
+		Runner:        runner,
+	}
+	recovered, err := installer.RecoverInterruptedActivation(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !recovered {
+		t.Fatal("interrupted activation was not recovered")
+	}
+	if build := readBuild(t, appPath); build != "1" {
+		t.Fatalf("restored build = %s, want 1", build)
+	}
+	if _, err := os.Stat(backupPath); !os.IsNotExist(err) {
+		t.Fatalf("backup remained after recovery: %v", err)
+	}
+	runner.mu.Lock()
+	commands := append([]string(nil), runner.commands...)
+	runner.mu.Unlock()
+	if fmt.Sprint(commands) != fmt.Sprint([]string{"/usr/bin/open"}) {
+		t.Fatalf("recovery commands = %v, want relaunch", commands)
+	}
+}
+
+func TestRecoverInterruptedActivationRefusesAmbiguousBackups(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	appPath := filepath.Join(root, "ChatGPT.app")
+	writeFakeBundle(t, filepath.Join(root, ".ChatGPT.app.codex-autoupdate-backup-1-123"), "1.0", 1)
+	writeFakeBundle(t, filepath.Join(root, ".ChatGPT.app.codex-autoupdate-backup-1-456"), "1.0", 1)
+	installer := Installer{
+		AppPath:       appPath,
+		CacheDir:      filepath.Join(root, "cache"),
+		QuitTimeout:   time.Second,
+		LaunchTimeout: time.Second,
+		Runner:        &fixtureRunner{appPath: appPath},
+	}
+	recovered, err := installer.RecoverInterruptedActivation(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "found 2 rollback bundles") {
+		t.Fatalf("expected ambiguous recovery error, got recovered=%t err=%v", recovered, err)
+	}
+}
+
 func TestApplyUsesSIGTERMWhenScheduledTasksRefuseNormalQuit(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

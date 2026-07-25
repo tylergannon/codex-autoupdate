@@ -20,3 +20,9 @@ friction: Detached proof jobs from an interrupted turn later contended for the c
 review: A configured Claude app-path override caused the canonical Claude Desktop executable and helpers to be parsed as standalone Claude Code because their paths contain spaces.
 decision: Claude CLI detection now excludes processes launched from any `Claude.app/Contents` bundle before tokenizing command text.
 decision: Live equal-version force replacement and controlled rollback completed against both real applications; pre/post inodes, PIDs, quarantine, strict signatures, signing teams, Gatekeeper acceptance, and residue cleanup were recorded.
+review: A second one-shot could send default-fatal `SIGUSR1` to a first one-shot because the lock recorded only its PID.
+decision: Lock metadata now distinguishes daemon and one-shot owners; only a cooperative daemon may be signaled, while concurrent one-shots fail without a takeover marker or signal.
+review: Process-only Claude activity vanished without a completion timestamp, allowing immediate activation on the first inactive poll.
+decision: Each watcher now remembers observed activity and starts its own fresh idle clock on the first subsequent inactive poll.
+review: Process interruption between the backup and activation renames could leave the canonical app missing and then silently skipped.
+decision: Watcher startup now verifies, restores, and relaunches exactly one retained backup for a missing canonical app and fails closed on ambiguous backups.

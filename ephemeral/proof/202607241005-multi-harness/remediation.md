@@ -34,6 +34,20 @@ one_shot_exit=1 daemon_exit=0 takeover_marker=absent
 The one-shot retained its expected bundle-inspection error, while the daemon
 yielded cleanly and the request marker was removed on failure.
 
+After adversarial review found that a second one-shot could signal the first,
+lock ownership was made explicit. A whole-binary reproduction held a temporary
+lock as a one-shot owner and invoked a second `update --force`:
+
+```text
+second_one_shot_exit=1
+holder_alive=yes
+holder_signaled=no
+takeover_marker=absent
+```
+
+The second command reported one-shot contention without signaling or
+interrupting the lock owner.
+
 ## Live activity and verified staging
 
 Production discovery found new releases for both installed applications:
@@ -93,8 +107,9 @@ The raw before, updater, and after records are:
 - `live-claude-force.log`
 - `live-claude-force.post.txt`
 
-Additional equal-version passes also completed successfully for both
-applications, demonstrating that repeated `--force` use remains operational.
+The preserved live evidence demonstrates one successful equal-version
+replacement per harness. Repeated equal-version behavior is covered by the
+automated force tests.
 
 ## Live rollback behavior
 
@@ -142,6 +157,11 @@ running build-2 bundle nor the retained build-1 backup was moved.
 PASS TestRollbackTerminatesRunningFailedReplacementBeforeRestore
 PASS TestRollbackDoesNotMoveBundlesWhenFailedReplacementCannotStop
 ```
+
+Additional focused tests demonstrate that process-only activity starts a fresh
+idle window on the first inactive poll, a missing canonical app is restored and
+relaunched from exactly one verified interrupted-activation backup, ambiguous
+backups fail closed, and a second one-shot never signals a one-shot lock owner.
 
 ## Automated checks
 

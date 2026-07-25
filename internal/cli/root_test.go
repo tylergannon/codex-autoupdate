@@ -103,7 +103,7 @@ func TestValidateRejectsUnknownHarness(t *testing.T) {
 func TestOneShotRunRequestsSafeTakeoverToAcquireSharedLock(t *testing.T) {
 	t.Parallel()
 	cacheDir := t.TempDir()
-	held, err := runlock.Acquire(cacheDir)
+	held, err := runlock.AcquireDaemon(cacheDir)
 	if err != nil {
 		t.Fatal(err)
 	}

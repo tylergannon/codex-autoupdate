@@ -19,6 +19,11 @@ var (
 
 const takeoverName = "takeover.request"
 
+const (
+	holderDaemon  = "daemon"
+	holderOneShot = "one-shot"
+)
+
 type Lock struct {
 	file *os.File
 }
@@ -28,6 +33,14 @@ type Takeover struct {
 }
 
 func Acquire(directory string) (*Lock, error) {
+	return acquire(directory, holderOneShot)
+}
+
+func AcquireDaemon(directory string) (*Lock, error) {
+	return acquire(directory, holderDaemon)
+}
+
+func acquire(directory, holderKind string) (*Lock, error) {
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return nil, fmt.Errorf("create lock directory: %w", err)
 	}
@@ -44,7 +57,7 @@ func Acquire(directory string) (*Lock, error) {
 		return nil, fmt.Errorf("lock watcher: %w", err)
 	}
 	if err := file.Truncate(0); err == nil {
-		_, _ = fmt.Fprintf(file, "%d\n", os.Getpid())
+		_, _ = fmt.Fprintf(file, "%d %s\n", os.Getpid(), holderKind)
 	}
 	return &Lock{file: file}, nil
 }
@@ -63,9 +76,12 @@ func RequestTakeover(directory string, wake func(int) error) (*Takeover, error) 
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return nil, fmt.Errorf("create takeover directory: %w", err)
 	}
-	holderPID, err := readPID(filepath.Join(directory, "watcher.lock"))
+	holderPID, holderKind, err := readHolder(filepath.Join(directory, "watcher.lock"))
 	if err != nil {
 		return nil, fmt.Errorf("read watcher PID: %w", err)
+	}
+	if holderKind != holderDaemon {
+		return nil, fmt.Errorf("another one-shot codex-autoupdate command is already running")
 	}
 	path := filepath.Join(directory, takeoverName)
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
@@ -136,4 +152,23 @@ func readPID(path string) (int, error) {
 		return 0, fmt.Errorf("invalid PID in %s", path)
 	}
 	return pid, nil
+}
+
+func readHolder(path string) (int, string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, "", err
+	}
+	fields := strings.Fields(string(data))
+	if len(fields) != 2 {
+		return 0, "", fmt.Errorf("invalid lock owner in %s", path)
+	}
+	pid, err := strconv.Atoi(fields[0])
+	if err != nil || pid <= 0 {
+		return 0, "", fmt.Errorf("invalid PID in %s", path)
+	}
+	if fields[1] != holderDaemon && fields[1] != holderOneShot {
+		return 0, "", fmt.Errorf("invalid lock owner kind in %s", path)
+	}
+	return pid, fields[1], nil
 }
