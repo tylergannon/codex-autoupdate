@@ -41,6 +41,7 @@ const (
 type Watcher struct {
 	ID                     string
 	Name                   string
+	SetupError             error
 	AppPath                string
 	IdleWindow             time.Duration
 	PollInterval           time.Duration
@@ -70,6 +71,9 @@ func (w *Watcher) Run(ctx context.Context, once bool) error {
 }
 
 func (w *Watcher) Step(ctx context.Context, force bool) (State, error) {
+	if w.SetupError != nil {
+		return Done, w.SetupError
+	}
 	if err := w.validate(); err != nil {
 		return Done, err
 	}

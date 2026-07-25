@@ -43,10 +43,11 @@ func (a *sequenceActivity) Detect(context.Context) (activity.Report, error) {
 }
 
 type fakeInstaller struct {
-	inspector *fakeInspector
-	prepared  bool
-	applied   bool
-	applyErr  error
+	inspector  *fakeInspector
+	prepared   bool
+	applied    bool
+	applyCount int
+	applyErr   error
 }
 
 func (i *fakeInstaller) Prepare(context.Context, appcast.Release) (update.Prepared, error) {
@@ -62,6 +63,7 @@ func (i *fakeInstaller) Apply(ctx context.Context, _ update.Prepared, preflight 
 		return i.applyErr
 	}
 	i.applied = true
+	i.applyCount++
 	i.inspector.build = "2"
 	return nil
 }
@@ -77,6 +79,13 @@ func TestWatcherForceReinstallsEqualVersion(t *testing.T) {
 	}
 	if state != Updated || !installer.prepared || !installer.applied {
 		t.Fatalf("state = %v, installer = %+v", state, installer)
+	}
+	state, err = watcher.Step(context.Background(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state != Updated || installer.applyCount != 2 {
+		t.Fatalf("second state = %v, installer = %+v", state, installer)
 	}
 }
 

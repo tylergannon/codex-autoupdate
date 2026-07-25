@@ -491,7 +491,8 @@ func (s settings) watchers(ctx context.Context, logger *slog.Logger) ([]*watch.W
 		if os.IsNotExist(err) {
 			recovered, recoveryErr := installer.RecoverInterruptedActivation(ctx)
 			if recoveryErr != nil {
-				return nil, recoveryErr
+				result = append(result, failedWatcher(target, recoveryErr, logger, s))
+				continue
 			}
 			if !recovered {
 				continue
@@ -499,10 +500,12 @@ func (s settings) watchers(ctx context.Context, logger *slog.Logger) ([]*watch.W
 			info, err = os.Lstat(target.appPath)
 		}
 		if err != nil {
-			return nil, fmt.Errorf("inspect %s path: %w", target.name, err)
+			result = append(result, failedWatcher(target, fmt.Errorf("inspect %s path: %w", target.name, err), logger, s))
+			continue
 		}
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return nil, fmt.Errorf("%s path must be a non-symbolic-link application bundle directory: %s", target.name, target.appPath)
+			result = append(result, failedWatcher(target, fmt.Errorf("%s path must be a non-symbolic-link application bundle directory: %s", target.name, target.appPath), logger, s))
+			continue
 		}
 		result = append(result, &watch.Watcher{
 			ID:                   target.id,
@@ -519,6 +522,17 @@ func (s settings) watchers(ctx context.Context, logger *slog.Logger) ([]*watch.W
 		})
 	}
 	return result, nil
+}
+
+func failedWatcher(target target, setupErr error, logger *slog.Logger, s settings) *watch.Watcher {
+	return &watch.Watcher{
+		ID:                   target.id,
+		Name:                 target.name,
+		SetupError:           setupErr,
+		PollInterval:         s.pollInterval,
+		ActivityPollInterval: s.activityPollInterval,
+		Logger:               logger,
+	}
 }
 
 func (s settings) selectedHarnesses() []string {

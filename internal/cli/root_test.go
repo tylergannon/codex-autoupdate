@@ -5,8 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
+	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/tylergannon/codex-autoupdate/internal/runlock"
 )
@@ -47,6 +51,46 @@ func TestRunOnceAndForceSilentlySkipMissingApplications(t *testing.T) {
 		if err := root.Execute(); err != nil {
 			t.Fatalf("%v failed: %v\n%s", args, err, stderr)
 		}
+	}
+}
+
+func TestWatcherSetupFailureDoesNotBlockOtherHarnessConstruction(t *testing.T) {
+	t.Parallel()
+	temp := t.TempDir()
+	chatGPTPath := filepath.Join(temp, "ChatGPT.app")
+	for _, name := range []string{
+		".ChatGPT.app.codex-autoupdate-backup-1-123",
+		".ChatGPT.app.codex-autoupdate-backup-1-456",
+		"Claude.app",
+	} {
+		if err := os.Mkdir(filepath.Join(temp, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	config := settings{
+		chatGPTAppPath:       chatGPTPath,
+		claudeAppPath:        filepath.Join(temp, "Claude.app"),
+		codexHome:            filepath.Join(temp, ".codex"),
+		claudeData:           filepath.Join(temp, "Claude"),
+		cacheDir:             filepath.Join(temp, "cache"),
+		idleWindow:           time.Minute,
+		pollInterval:         time.Minute,
+		activityPollInterval: time.Second,
+		quitTimeout:          time.Second,
+		launchTimeout:        time.Second,
+	}
+	watchers, err := config.watchers(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(watchers) != 2 {
+		t.Fatalf("watchers = %d, want failed ChatGPT and healthy Claude", len(watchers))
+	}
+	if watchers[0].ID != chatGPT || watchers[0].SetupError == nil {
+		t.Fatalf("first watcher = %+v, want isolated ChatGPT setup failure", watchers[0])
+	}
+	if watchers[1].ID != claude || watchers[1].SetupError != nil {
+		t.Fatalf("second watcher = %+v, want healthy Claude", watchers[1])
 	}
 }
 

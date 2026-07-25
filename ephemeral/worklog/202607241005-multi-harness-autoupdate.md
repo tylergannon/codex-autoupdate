@@ -21,6 +21,7 @@ review: A configured Claude app-path override caused the canonical Claude Deskto
 decision: Claude CLI detection now excludes processes launched from any `Claude.app/Contents` bundle before tokenizing command text.
 decision: Live equal-version force replacement and controlled rollback completed against both real applications; pre/post inodes, PIDs, quarantine, strict signatures, signing teams, Gatekeeper acceptance, and residue cleanup were recorded.
 review: A second one-shot could send default-fatal `SIGUSR1` to a first one-shot because the lock recorded only its PID.
+review: Round three found that setup/recovery errors still aborted watcher construction before healthy harnesses could run, and that repeated successful forced reinstallation was not preserved. Setup failures are now represented as per-harness watcher errors so the coordinator retains failure isolation; the equal-version watcher test now performs two consecutive passes; a second real Claude force pass is preserved and the second ChatGPT pass is scheduled for the first safe idle window.
 decision: Lock metadata now distinguishes daemon and one-shot owners; only a cooperative daemon may be signaled, while concurrent one-shots fail without a takeover marker or signal.
 review: Process-only Claude activity vanished without a completion timestamp, allowing immediate activation on the first inactive poll.
 decision: Each watcher now remembers observed activity and starts its own fresh idle clock on the first subsequent inactive poll.

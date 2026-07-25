@@ -107,9 +107,17 @@ The raw before, updater, and after records are:
 - `live-claude-force.log`
 - `live-claude-force.post.txt`
 
-The preserved live evidence demonstrates one successful equal-version
-replacement per harness. Repeated equal-version behavior is covered by the
-automated force tests.
+The original preserved live evidence demonstrates one successful equal-version
+replacement per harness. A second successful Claude pass replaced inode
+`250231443` with `250325489`, relaunched PID 43514 as PID 59361, and again
+passed strict signature and Gatekeeper checks. Its transcript is:
+
+- `live-claude-force-repeat.txt`
+
+The automated force test also invokes two consecutive successful equal-version
+passes against the same watcher and installer state. A second successful live
+ChatGPT transcript is recorded separately below once the active proof-producing
+Codex task has safely become idle.
 
 ## Live rollback behavior
 
