@@ -105,19 +105,23 @@ version checks. It then:
 1. verifies the advertised version, pinned bundle identifier and signing team,
    strict code signature, Gatekeeper acceptance, and host architecture;
 2. asks the exact application to quit normally;
-3. if quit is refused, re-resolves the exact main PID and sends `SIGTERM`;
-4. confirms process absence, atomically replaces the bundle, relaunches it, and
-   verifies the signed expected version became ready.
+3. waits for every process executing from that application bundle, including
+   detached or reparented helpers;
+4. sends `SIGTERM` to survivors, then uses a bounded `SIGKILL` fallback for any
+   processes that still refuse to exit;
+5. refuses to move the bundle until it is quiescent, atomically replaces it,
+   relaunches it, and verifies exactly one signed expected main application
+   became ready.
 
-It never sends `SIGKILL`. Replacements are serialized in `chatgpt`, then
-`claude` order. A busy, missing, or failed harness does not block the other.
+Replacements are serialized in `chatgpt`, then `claude` order. A busy, missing,
+or failed harness does not block the other.
 
 ## Recovery
 
 If a replacement does not become ready, the prior application is restored and
-relaunched. Rollback uses the same graceful-quit and exact-main-PID `SIGTERM`
-path and will not move a running failed replacement. The failed version is
-quarantined separately under:
+relaunched. Rollback uses the same bundle-wide graceful-quit, `SIGTERM`, and
+bounded `SIGKILL` path and will not move a running failed replacement. The
+failed version is quarantined separately under:
 
 ```text
 ~/Library/Caches/codex-autoupdate/chatgpt/failed-version-VERSION.json

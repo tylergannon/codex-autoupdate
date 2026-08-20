@@ -186,6 +186,9 @@ func (i *Installer) Apply(ctx context.Context, prepared Prepared, preflight func
 	if err := i.shutdown(ctx); err != nil {
 		return err
 	}
+	if err := i.requireBundleQuiescent(ctx); err != nil {
+		return err
+	}
 
 	backupPath := filepath.Join(filepath.Dir(i.AppPath), fmt.Sprintf(".%s.codex-autoupdate-backup-%s-%d", filepath.Base(i.AppPath), release.Key(current.Build), time.Now().UnixNano()))
 	if err := os.Rename(i.AppPath, backupPath); err != nil {
@@ -275,18 +278,18 @@ func (i *Installer) download(ctx context.Context, candidate release.Release, arc
 	return nil
 }
 
-func (i *Installer) waitForExit(ctx context.Context) error {
+func (i *Installer) waitForBundleExit(ctx context.Context) error {
 	deadline := time.Now().Add(i.QuitTimeout)
 	for {
-		application, err := i.processes().Application(ctx, i.AppPath, i.identity().Executable)
+		processes, err := i.processes().BundleProcesses(ctx, i.AppPath)
 		if err != nil {
 			return err
 		}
-		if application == nil {
+		if len(processes) == 0 {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("%s did not exit within %s; update aborted", i.identity().Name, i.QuitTimeout)
+			return fmt.Errorf("%d %s bundle process(es) did not exit within %s (PIDs: %s)", len(processes), i.identity().Name, i.QuitTimeout, processIDs(processes))
 		}
 		if err := sleep(ctx, 500*time.Millisecond); err != nil {
 			return err
@@ -295,43 +298,87 @@ func (i *Installer) waitForExit(ctx context.Context) error {
 }
 
 func (i *Installer) shutdown(ctx context.Context) error {
-	application, err := i.processes().Application(ctx, i.AppPath, i.identity().Executable)
+	processes, err := i.processes().BundleProcesses(ctx, i.AppPath)
 	if err != nil {
 		return err
 	}
-	if application == nil {
+	if len(processes) == 0 {
 		return nil
 	}
-	i.logger().Info("requesting graceful application shutdown", "harness", i.identity().Name, "pid", application.PID)
-	script := fmt.Sprintf(`tell application id %q to quit`, i.identity().BundleIdentifier)
-	output, quitErr := i.runner().CombinedOutput(ctx, "/usr/bin/osascript", "-e", script)
 	var gracefulCause error
-	if quitErr != nil {
-		gracefulCause = commandError("request "+i.identity().Name+" quit", output, quitErr)
-	} else {
-		exitErr := i.waitForExit(ctx)
-		if exitErr == nil {
-			return nil
-		}
-		if errors.Is(exitErr, context.Canceled) || errors.Is(exitErr, context.DeadlineExceeded) {
-			return exitErr
-		}
-		gracefulCause = exitErr
-	}
-	application, err = i.processes().Application(ctx, i.AppPath, i.identity().Executable)
-	if err != nil {
-		return fmt.Errorf("%w; recheck %s process: %v", gracefulCause, i.identity().Name, err)
-	}
+	application := mainApplication(processes, i.AppPath, i.identity().Executable)
 	if application == nil {
+		gracefulCause = fmt.Errorf("found %d lingering %s bundle process(es) without a main application (PIDs: %s)", len(processes), i.identity().Name, processIDs(processes))
+	} else {
+		i.logger().Info("requesting graceful application shutdown", "harness", i.identity().Name, "pid", application.PID, "bundle_processes", len(processes))
+		script := fmt.Sprintf(`tell application id %q to quit`, i.identity().BundleIdentifier)
+		output, quitErr := i.runner().CombinedOutput(ctx, "/usr/bin/osascript", "-e", script)
+		if quitErr != nil {
+			gracefulCause = commandError("request "+i.identity().Name+" quit", output, quitErr)
+		} else {
+			exitErr := i.waitForBundleExit(ctx)
+			if exitErr == nil {
+				return nil
+			}
+			if isContextError(exitErr) {
+				return exitErr
+			}
+			gracefulCause = exitErr
+		}
+	}
+
+	processes, err = i.processes().BundleProcesses(ctx, i.AppPath)
+	if err != nil {
+		return fmt.Errorf("%w; recheck %s bundle processes: %v", gracefulCause, i.identity().Name, err)
+	}
+	if len(processes) == 0 {
 		return nil
 	}
-	i.logger().Warn("graceful application shutdown did not stop the application; sending SIGTERM", "harness", i.identity().Name, "pid", application.PID, "error", gracefulCause)
-	output, termErr := i.runner().CombinedOutput(ctx, "/bin/kill", "-TERM", strconv.Itoa(application.PID))
-	if termErr != nil {
-		return fmt.Errorf("%w; %w", gracefulCause, commandError("send SIGTERM to "+i.identity().Name, output, termErr))
+	i.logger().Warn("application shutdown incomplete; sending SIGTERM to bundle processes", "harness", i.identity().Name, "pids", processIDs(processes), "error", gracefulCause)
+	termErr := i.signalProcesses(ctx, "TERM", processes)
+	exitErr := i.waitForBundleExit(ctx)
+	if exitErr == nil {
+		return nil
 	}
-	if err := i.waitForExit(ctx); err != nil {
-		return fmt.Errorf("%w; application still running after SIGTERM: %v", gracefulCause, err)
+	if isContextError(exitErr) {
+		return exitErr
+	}
+
+	processes, err = i.processes().BundleProcesses(ctx, i.AppPath)
+	if err != nil {
+		return errors.Join(gracefulCause, termErr, fmt.Errorf("recheck %s bundle processes after SIGTERM: %w", i.identity().Name, err))
+	}
+	if len(processes) == 0 {
+		return nil
+	}
+	i.logger().Warn("bundle processes survived SIGTERM; sending SIGKILL", "harness", i.identity().Name, "pids", processIDs(processes), "error", exitErr)
+	killErr := i.signalProcesses(ctx, "KILL", processes)
+	finalErr := i.waitForBundleExit(ctx)
+	if finalErr == nil {
+		return nil
+	}
+	return errors.Join(gracefulCause, termErr, exitErr, killErr, fmt.Errorf("%s bundle still running after SIGKILL: %w", i.identity().Name, finalErr))
+}
+
+func (i *Installer) signalProcesses(ctx context.Context, signal string, processes []macos.Process) error {
+	args := []string{"-" + signal}
+	for _, process := range processes {
+		args = append(args, strconv.Itoa(process.PID))
+	}
+	output, err := i.runner().CombinedOutput(ctx, "/bin/kill", args...)
+	if err != nil {
+		return commandError("send SIG"+signal+" to "+i.identity().Name+" bundle processes", output, err)
+	}
+	return nil
+}
+
+func (i *Installer) requireBundleQuiescent(ctx context.Context) error {
+	processes, err := i.processes().BundleProcesses(ctx, i.AppPath)
+	if err != nil {
+		return fmt.Errorf("confirm %s bundle quiescence: %w", i.identity().Name, err)
+	}
+	if len(processes) != 0 {
+		return fmt.Errorf("refusing to move %s bundle while %d process(es) are running (PIDs: %s)", i.identity().Name, len(processes), processIDs(processes))
 	}
 	return nil
 }
@@ -343,11 +390,11 @@ func (i *Installer) launchAndWait(ctx context.Context, expectedBuild string) err
 	}
 	deadline := time.Now().Add(i.LaunchTimeout)
 	for {
-		application, err := i.processes().Application(ctx, i.AppPath, i.identity().Executable)
+		applications, err := i.processes().Applications(ctx, i.AppPath, i.identity().Executable)
 		if err != nil {
 			return err
 		}
-		if application != nil {
+		if len(applications) == 1 {
 			bundle, inspectErr := i.inspector().Inspect(ctx, i.AppPath, true)
 			if inspectErr == nil && bundle.Build == expectedBuild {
 				return nil
@@ -362,11 +409,46 @@ func (i *Installer) launchAndWait(ctx context.Context, expectedBuild string) err
 	}
 }
 
+func processIDs(processes []macos.Process) string {
+	ids := make([]string, 0, len(processes))
+	for _, process := range processes {
+		ids = append(ids, strconv.Itoa(process.PID))
+	}
+	return strings.Join(ids, ",")
+}
+
+func mainApplication(processes []macos.Process, appPath, executableName string) *macos.Process {
+	executable := filepath.Join(filepath.Clean(appPath), "Contents", "MacOS", executableName)
+	var newest *macos.Process
+	for _, process := range processes {
+		if process.Command != executable && !strings.HasPrefix(process.Command, executable+" ") {
+			continue
+		}
+		if newest == nil || process.Started.After(newest.Started) {
+			copy := process
+			newest = &copy
+		}
+	}
+	return newest
+}
+
+func isContextError(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
 func (i *Installer) rollback(ctx context.Context, backupPath string, prepared Prepared, previous macos.Bundle, cause error) error {
 	i.logger().Error("updated app failed readiness check; rolling back", "error", cause)
 	if err := i.shutdown(ctx); err != nil {
 		markerErr := i.markFailure(prepared.Release, cause)
 		result := fmt.Errorf("%w; rollback could not stop failed replacement: %v; previous bundle retained at %s", cause, err, backupPath)
+		if markerErr != nil {
+			result = fmt.Errorf("%w; could not persist quarantine marker: %v", result, markerErr)
+		}
+		return result
+	}
+	if err := i.requireBundleQuiescent(ctx); err != nil {
+		markerErr := i.markFailure(prepared.Release, cause)
+		result := fmt.Errorf("%w; rollback bundle quiescence check failed: %v; previous bundle retained at %s", cause, err, backupPath)
 		if markerErr != nil {
 			result = fmt.Errorf("%w; could not persist quarantine marker: %v", result, markerErr)
 		}

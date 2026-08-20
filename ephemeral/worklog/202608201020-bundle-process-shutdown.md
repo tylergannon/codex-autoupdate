@@ -1,0 +1,5 @@
+decision: Issue #9 applies to every configured Desktop harness: replacement and rollback must wait for all processes executing from that harness bundle, not only its main application PID.
+decision: Graceful quit remains the first step; surviving bundle processes receive SIGTERM, then a bounded SIGKILL fallback, and the bundle is never moved while any matching executable remains.
+decision: Process ownership is determined by executable command paths rooted under the exact configured .app bundle, so detached and reparented helpers are covered without relying on parent PID ancestry.
+correction: The prior exact-main-PID and never-SIGKILL policy is unsafe; issue #9 demonstrates that bundle helpers outlive the main process, and a fresh Computer Use helper still cannot recover capture once the old app generation has contaminated native state.
+decision: Recheck bundle quiescence immediately before activation and rollback renames so a respawn between shutdown and filesystem mutation aborts safely.
