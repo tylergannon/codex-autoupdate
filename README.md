@@ -45,8 +45,9 @@ without signaling the one-shot that already owns the lock.
 Each harness has its own idle window. Open windows, ordinary chat use, dormant
 sessions, and future schedules do not block replacement; currently executing
 Codex, Claude Code, or Claude Cowork work does. Once idle, the updater asks the
-application to quit. If quit is refused, it re-resolves the exact main process
-and sends `SIGTERM`; it never sends `SIGKILL`.
+application to quit. It then waits for every process executing from that app
+bundle, including detached helpers. Survivors receive `SIGTERM`, then a bounded
+`SIGKILL` fallback; replacement is refused until the old bundle is quiescent.
 
 See [llms.txt](llms.txt) for configuration, LaunchAgent operation, verification,
 and recovery.

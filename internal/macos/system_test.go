@@ -100,6 +100,40 @@ func TestDesktopApplicationExcludesPersistentBundleHelpers(t *testing.T) {
 	}
 }
 
+func TestProcessFinderListsEveryBundleOwnedProcess(t *testing.T) {
+	t.Parallel()
+	appPath := "/Applications/Claude.app"
+	output := ` 11 Fri Jul 17 09:00:00 2026 /Applications/Claude.app/Contents/MacOS/Claude
+	12 Fri Jul 17 09:00:01 2026 /Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper --type=gpu-process
+	13 Fri Jul 17 09:00:02 2026 /Applications/Claude.app/Contents/Resources/native/detached-helper
+	14 Fri Jul 17 09:00:03 2026 /Applications/Claude Classic.app/Contents/MacOS/Claude
+`
+	processes, err := (ProcessFinder{Runner: outputRunner(output)}).BundleProcesses(context.Background(), appPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(processes) != 3 {
+		t.Fatalf("bundle processes = %+v, want PIDs 11, 12, and 13", processes)
+	}
+	if got := []int{processes[0].PID, processes[1].PID, processes[2].PID}; fmt.Sprint(got) != "[11 12 13]" {
+		t.Fatalf("bundle process PIDs = %v, want [11 12 13]", got)
+	}
+}
+
+func TestProcessFinderListsAllMainApplicationInstances(t *testing.T) {
+	t.Parallel()
+	output := ` 11 Fri Jul 17 09:00:00 2026 /Applications/ChatGPT.app/Contents/MacOS/ChatGPT
+	12 Fri Jul 17 10:00:00 2026 /Applications/ChatGPT.app/Contents/MacOS/ChatGPT --duplicate
+`
+	applications, err := (ProcessFinder{Runner: outputRunner(output)}).Applications(context.Background(), "/Applications/ChatGPT.app", "ChatGPT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(applications) != 2 || applications[0].PID != 11 || applications[1].PID != 12 {
+		t.Fatalf("applications = %+v, want both main processes", applications)
+	}
+}
+
 func TestOpenFilesUnderFindsDeletedClaudeTaskOutputs(t *testing.T) {
 	t.Parallel()
 	runner := commandRunner{

@@ -215,13 +215,32 @@ func (f ProcessFinder) DesktopApplication(ctx context.Context, appPath string) (
 }
 
 func (f ProcessFinder) Application(ctx context.Context, appPath, executableName string) (*Process, error) {
+	applications, err := f.Applications(ctx, appPath, executableName)
+	if err != nil {
+		return nil, err
+	}
+	return newestMatching(applications, func(Process) bool { return true }), nil
+}
+
+func (f ProcessFinder) Applications(ctx context.Context, appPath, executableName string) ([]Process, error) {
 	processes, err := f.All(ctx)
 	if err != nil {
 		return nil, err
 	}
 	executable := filepath.Join(filepath.Clean(appPath), "Contents", "MacOS", executableName)
-	return newestMatching(processes, func(process Process) bool {
-		return process.Command == executable || strings.HasPrefix(process.Command, executable+" ")
+	return matchingProcesses(processes, func(process Process) bool {
+		return commandRunsExecutable(process.Command, executable)
+	}), nil
+}
+
+func (f ProcessFinder) BundleProcesses(ctx context.Context, appPath string) ([]Process, error) {
+	processes, err := f.All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	bundlePrefix := filepath.Clean(appPath) + string(filepath.Separator)
+	return matchingProcesses(processes, func(process Process) bool {
+		return strings.HasPrefix(process.Command, bundlePrefix)
 	}), nil
 }
 
@@ -298,6 +317,20 @@ func newestMatching(processes []Process, matches func(Process) bool) *Process {
 		newest = &copy
 	}
 	return newest
+}
+
+func matchingProcesses(processes []Process, matches func(Process) bool) []Process {
+	matching := make([]Process, 0, len(processes))
+	for _, process := range processes {
+		if matches(process) {
+			matching = append(matching, process)
+		}
+	}
+	return matching
+}
+
+func commandRunsExecutable(command, executable string) bool {
+	return command == executable || strings.HasPrefix(command, executable+" ")
 }
 
 func commandHasArgument(command, argument string) bool {
