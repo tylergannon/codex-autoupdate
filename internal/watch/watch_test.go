@@ -1,10 +1,13 @@
 package watch
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -123,6 +126,83 @@ func TestWatcherForceAbandonsStagedWorkAfterIndependentUpdate(t *testing.T) {
 	}
 	if state != Done || installer.applied {
 		t.Fatalf("state after independent update = %v, installer = %+v", state, installer)
+	}
+}
+
+// TestWatcherRemovesStagedResidueWhenApplicationBecomesCurrentIndependently is
+// a regression test for the established bug recorded in
+// ephemeral/proof/bug-adjudication.md (bug B): live evidence on the host
+// showed a full 801 MiB abandoned staged bundle,
+// /Applications/.Claude.app.codex-autoupdate-1_34493_1.new, left behind after
+// Claude updated itself to the staged build before the watcher applied it.
+// Watcher.Step's "application is current" branch (internal/watch/watch.go)
+// only calls w.clearPrepared(), which nils in-memory bookkeeping; it never
+// asks the Installer to remove the on-disk staged bundle at
+// w.prepared.StagedPath, and cleanupResidue is reachable only from a later
+// Prepare() call for a non-current candidate. This test stages residue
+// directly (bypassing Prepare, since the defect is in Step's bookkeeping, not
+// in Prepare) and proves the residue file survives an "application is
+// current" cycle.
+func TestWatcherRemovesStagedResidueWhenApplicationBecomesCurrentIndependently(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	stagedPath := filepath.Join(root, ".Claude.app.codex-autoupdate-2.new")
+	if err := os.MkdirAll(stagedPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stagedPath, "marker"), []byte("staged bundle"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	inspector := &fakeInspector{build: "2"} // installed build now equals the candidate: updated independently
+	installer := &fakeInstaller{inspector: inspector}
+	watcher := testWatcher(inspector, installer, fakeFeed{release: appcast.Release{Build: "2"}})
+	watcher.prepared = &update.Prepared{Release: appcast.Release{Build: "2"}, StagedPath: stagedPath}
+	watcher.preparedInstalledBuild = "1"
+
+	state, err := watcher.Step(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state != Done {
+		t.Fatalf("state = %v, want Done", state)
+	}
+	if _, statErr := os.Stat(stagedPath); !os.IsNotExist(statErr) {
+		t.Fatalf("abandoned staged bundle residue was not removed: %s (stat err = %v)", stagedPath, statErr)
+	}
+}
+
+// TestWatcherDoesNotLogDuplicateStatusOnUnchangedPendingState is a regression
+// test for the established bug recorded in ephemeral/proof/bug-adjudication.md
+// (bug D): the live installed watcher's stderr.log had grown to 35,470 lines /
+// 5,119,873 bytes after roughly four days, dominated by repeated, byte-for-byte
+// identical "waiting for active work to finish" / "application is current"
+// records emitted every ActivityPollInterval tick (as fast as ~5 seconds)
+// regardless of whether the underlying report changed. Watcher.Step
+// (internal/watch/watch.go) unconditionally logs on every call when work is
+// active, with no gate on the reported state actually changing since the
+// previous tick, so any sufficiently long pending or steady-state period grows
+// the log file without bound purely from repetition. This test drives Step
+// directly (no launchd, no timers) with an unchanged Active report across
+// repeated ticks and counts identical log records.
+func TestWatcherDoesNotLogDuplicateStatusOnUnchangedPendingState(t *testing.T) {
+	t.Parallel()
+	var buffer bytes.Buffer
+	inspector := &fakeInspector{build: "1"}
+	installer := &fakeInstaller{inspector: inspector}
+	watcher := testWatcher(inspector, installer, fakeFeed{release: appcast.Release{Build: "2"}})
+	watcher.Logger = slog.New(slog.NewTextHandler(&buffer, nil))
+	watcher.Activity = &sequenceActivity{reports: []activity.Report{{ActiveThreads: []string{"claude-task-pid:1"}}}}
+
+	const ticks = 5
+	for range ticks {
+		if _, err := watcher.Step(context.Background(), false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	occurrences := strings.Count(buffer.String(), "waiting for active work to finish")
+	if occurrences != 1 {
+		t.Fatalf("logged %d identical status records across %d ticks with unchanged state, want 1 (log must not grow without bound while nothing changes)", occurrences, ticks)
 	}
 }
 

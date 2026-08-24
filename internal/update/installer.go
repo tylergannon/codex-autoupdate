@@ -24,6 +24,23 @@ type Prepared struct {
 	StagedPath string
 }
 
+// RemovePrepared removes a staged application bundle that will not be applied.
+func RemovePrepared(prepared Prepared) error {
+	if prepared.StagedPath == "" {
+		return nil
+	}
+	path := filepath.Clean(prepared.StagedPath)
+	base := filepath.Base(path)
+	if !filepath.IsAbs(path) || !strings.HasPrefix(base, ".") ||
+		!strings.Contains(base, ".app.codex-autoupdate-") || !strings.HasSuffix(base, ".new") {
+		return fmt.Errorf("refusing to remove invalid staged application path: %s", prepared.StagedPath)
+	}
+	if err := removeExact(path, filepath.Dir(path)); err != nil {
+		return fmt.Errorf("remove staged application %s: %w", path, err)
+	}
+	return nil
+}
+
 type Installer struct {
 	AppPath       string
 	CacheDir      string

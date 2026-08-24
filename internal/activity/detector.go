@@ -74,6 +74,7 @@ func (d *Detector) Detect(ctx context.Context) (Report, error) {
 	}
 	report := Report{AppServerPID: server.PID, AppServerStart: server.Started, LastLifecycle: server.Started}
 	cutoff := server.Started.Add(-10 * time.Second)
+	currentRollouts := make(map[string]struct{})
 	for _, root := range []string{filepath.Join(d.CodexHome, "sessions"), filepath.Join(d.CodexHome, "archived_sessions")} {
 		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
@@ -95,6 +96,7 @@ func (d *Detector) Detect(ctx context.Context) (Report, error) {
 			if info.ModTime().Before(cutoff) {
 				return nil
 			}
+			currentRollouts[path] = struct{}{}
 			cached, ok := d.cache[path]
 			state := cached.state
 			if !ok || !cached.modTime.Equal(info.ModTime()) || cached.size != info.Size() {
@@ -120,6 +122,11 @@ func (d *Detector) Detect(ctx context.Context) (Report, error) {
 		})
 		if err != nil && !os.IsNotExist(err) {
 			return Report{}, err
+		}
+	}
+	for path := range d.cache {
+		if _, exists := currentRollouts[path]; !exists {
+			delete(d.cache, path)
 		}
 	}
 	slices.Sort(report.ActiveThreads)

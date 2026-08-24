@@ -91,6 +91,43 @@ func TestDetectorTreatsMissingDesktopServerAsIdle(t *testing.T) {
 	}
 }
 
+// TestDetectorPrunesCacheEntriesForRolloutsThatNoLongerExist is a regression
+// test for the established bug recorded in ephemeral/proof/bug-adjudication.md
+// (bug C): Detector.cache (internal/activity/detector.go) is keyed by rollout
+// file path and is reset only when the app-server PID changes (Detect,
+// lines 66-74); no code path ever deletes an individual entry, including when
+// its file is archived, deleted, or otherwise no longer present. For a
+// long-lived Codex Desktop app-server process, every distinct rollout file
+// ever observed accumulates a permanent map entry, growing memory and walk
+// cost without bound for the life of that server PID. This test creates one
+// rollout, lets it get cached, deletes it from disk, then creates a second
+// rollout under the same unchanged server PID and asserts the cache reflects
+// only currently-existing rollouts.
+func TestDetectorPrunesCacheEntriesForRolloutsThatNoLongerExist(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	serverStart := time.Now().Add(-time.Hour).Truncate(time.Second)
+	server := &macos.Process{PID: 42, Started: serverStart}
+	detector := Detector{AppPath: "/Applications/ChatGPT.app", CodexHome: home, Processes: staticProcessSource{server}}
+
+	first := writeRollout(t, home, "first", "Codex Desktop", []lifecycle{{"task_started", serverStart.Add(time.Minute)}, {"task_complete", serverStart.Add(2 * time.Minute)}}, false)
+	if _, err := detector.Detect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Remove(first); err != nil {
+		t.Fatal(err)
+	}
+	writeRollout(t, home, "second", "Codex Desktop", []lifecycle{{"task_started", serverStart.Add(3 * time.Minute)}, {"task_complete", serverStart.Add(4 * time.Minute)}}, false)
+	if _, err := detector.Detect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := len(detector.cache); got != 1 {
+		t.Fatalf("cache retains %d entries after one rollout was deleted from disk, want 1 (stale entries must not accumulate for the life of the app-server PID)", got)
+	}
+}
+
 type lifecycle struct {
 	event string
 	at    time.Time
