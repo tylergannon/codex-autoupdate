@@ -1,0 +1,144 @@
+name: close-first-fix-proof-gaps
+goal: >
+  Close two deterministic proof gaps found during primary review of commit
+  07f2989 without broadening scope. First, a restarted watcher with no in-memory
+  Prepared value must remove a matching orphaned .app.codex-autoupdate-*.new
+  sibling when the installed application is current; this is required to clean
+  the live 801 MiB Claude residue after deployment. Second, unchanged-active
+  log deduplication must emit a fresh active-work status after an intervening
+  current-state cycle. Each gap must have its own binary command that fails on
+  the current implementation before production edits and passes unchanged
+  afterward. Do not fix anything else.
+start: establish_gaps
+
+defaults:
+  timeout: 1200s
+  fidelity: none
+  max_retries: 1
+
+nodes:
+  - id: establish_gaps
+    type: codergen
+    max_visits: 1
+    llm_provider: anthropic
+    llm_model: claude-sonnet-5
+    reasoning_effort: high
+    prompt: >
+      Inspect the current code and primary worklog finding. Do not edit
+      production code and do not change the four existing established tests.
+      Add one focused regression test and independent shell command for each of
+      the two goal claims. The orphan test must begin with watcher.prepared nil,
+      create a realistically named sibling on a real temporary filesystem,
+      drive the current-version Step branch, and assert the orphan is absent.
+      The logging test must observe active work, then a current-version cycle,
+      then the same active work for a newer candidate and require two active
+      status records total. Create executable
+      ephemeral/proof/check-closeout-gaps.sh with baseline/fixed modes that
+      requires both commands and checks them independently. Run baseline and
+      write exact results to ephemeral/proof/closeout-gap-establishment.md.
+    edges:
+      - to: gap_baseline_gate
+
+  - id: gap_baseline_gate
+    type: tool
+    tool_command: |
+      set -eu
+      test -x ephemeral/proof/check-closeout-gaps.sh
+      test -s ephemeral/proof/closeout-gap-establishment.md
+      changed="$(git diff --name-only HEAD; git ls-files --others --exclude-standard)"
+      bad="$(printf '%s\n' "$changed" | awk 'NF && $0 !~ /_test\.go$/ && $0 !~ /^ephemeral\// && $0 !~ /^\.tractor\// {print}')"
+      test -z "$bad"
+      ephemeral/proof/check-closeout-gaps.sh baseline
+    on_success: implement_gaps
+    on_error: failure
+
+  - id: implement_gaps
+    type: codergen
+    max_visits: 5
+    llm_provider: openai
+    llm_model: gpt-5.6-sol
+    reasoning_effort: high
+    prompt: >
+      Read the two closeout-gap tests and establishment artifact. Make the
+      smallest idiomatic production correction that makes both commands pass.
+      Do not alter, weaken, rename, skip, or delete any test or proof command,
+      including the four tests from the first Tractor loop. Do not broaden
+      scope. Run both proof suites and the full race-enabled suite.
+    edges:
+      - to: gap_implementation_gate
+
+  - id: gap_implementation_gate
+    type: tool
+    max_visits: 6
+    tool_command: |
+      set -eu
+      ephemeral/proof/check-closeout-gaps.sh fixed
+      ephemeral/proof/check-established-bugs.sh fixed
+      git diff --check
+      go mod verify
+      go vet ./...
+      golangci-lint run ./...
+      go test -race -count=1 ./...
+    on_success: gap_review
+    on_error: implement_gaps
+
+  - id: gap_review
+    type: codergen
+    max_visits: 3
+    llm_provider: gemini
+    llm_model: gemini-3.1-pro-low
+    reasoning_effort: high
+    prompt: >
+      Independently review the complete current diff and executable proof,
+      including all six bug commands. Run them. Ensure the two new regressions
+      failed before their production fix, now pass unchanged, preserve the
+      first four fixes, and do not introduce unsafe deletion or misleading
+      state suppression. Do not edit code or tests. Write a new complete review
+      to the next unused ephemeral/reviews/20260824-tractor-closeout-round-NN.md
+      and put that path alone in
+      ephemeral/reviews/20260824-tractor-closeout-latest.txt. Begin exactly with
+      `Outcome: no findings` or `Outcome: material findings remain`.
+    edges:
+      - to: gap_review_gate
+
+  - id: gap_review_gate
+    type: tool
+    max_visits: 3
+    tool_command: |
+      set -eu
+      latest="$(cat ephemeral/reviews/20260824-tractor-closeout-latest.txt)"
+      test -s "$latest"
+      head -n 1 "$latest" | grep -Fx 'Outcome: no findings'
+      ephemeral/proof/check-closeout-gaps.sh fixed
+      ephemeral/proof/check-established-bugs.sh fixed
+    on_success: gap_validate
+    on_error: implement_gaps
+
+  - id: gap_validate
+    type: codergen
+    max_visits: 1
+    llm_provider: anthropic
+    llm_model: claude-sonnet-5
+    reasoning_effort: high
+    prompt: >
+      Validate the entire current fix as a fresh operator. Run all six proof
+      commands independently, both aggregate fixed-mode scripts, and the full
+      race-enabled suite. Inspect the deletion guard and state-transition
+      behavior. Do not edit production code or tests. Write commands, exit
+      statuses, relevant outputs, and git identity to
+      ephemeral/proof/tractor-closeout-validation.md. End with exactly
+      `Outcome: PASS` only if every claim is demonstrated.
+    edges:
+      - to: gap_final_gate
+
+  - id: gap_final_gate
+    type: tool
+    tool_command: |
+      set -eu
+      ephemeral/proof/check-closeout-gaps.sh fixed
+      ephemeral/proof/check-established-bugs.sh fixed
+      tail -n 1 ephemeral/proof/tractor-closeout-validation.md | grep -Fx 'Outcome: PASS'
+      git diff --check
+      go test -race -count=1 ./...
+    on_success: success
+    on_error: implement_gaps
