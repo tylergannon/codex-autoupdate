@@ -41,6 +41,27 @@ func RemovePrepared(prepared Prepared) error {
 	return nil
 }
 
+// RemoveStagedResidue removes staged application bundles abandoned by an
+// earlier updater process.
+func RemoveStagedResidue(appPath string) error {
+	appPath = filepath.Clean(appPath)
+	if !filepath.IsAbs(appPath) || filepath.Ext(appPath) != ".app" {
+		return fmt.Errorf("invalid application path for staged-residue cleanup: %s", appPath)
+	}
+	parent := filepath.Dir(appPath)
+	pattern := filepath.Join(parent, "."+filepath.Base(appPath)+".codex-autoupdate-*.new")
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return fmt.Errorf("find staged application residue: %w", err)
+	}
+	for _, path := range matches {
+		if err := removeExact(path, parent); err != nil {
+			return fmt.Errorf("remove staged application residue %s: %w", path, err)
+		}
+	}
+	return nil
+}
+
 type Installer struct {
 	AppPath       string
 	CacheDir      string

@@ -104,6 +104,10 @@ func (w *Watcher) Step(ctx context.Context, force bool) (State, error) {
 		if err := w.removePrepared(); err != nil {
 			return Done, err
 		}
+		if err := update.RemoveStagedResidue(w.AppPath); err != nil {
+			return Done, fmt.Errorf("remove abandoned %s replacement: %w", w.name(), err)
+		}
+		w.lastActiveWork = ""
 		builds := installed.Build + "\x00" + candidate.Build
 		if builds != w.lastCurrentBuilds {
 			w.logger().Info("application is current", "harness", w.id(), "installed_build", installed.Build, "available_build", candidate.Build)

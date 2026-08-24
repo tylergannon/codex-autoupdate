@@ -25,6 +25,20 @@ type fakeFeed struct {
 
 func (f fakeFeed) Latest(context.Context) (appcast.Release, error) { return f.release, f.err }
 
+type sequenceFeed struct {
+	releases []appcast.Release
+	index    int
+}
+
+func (f *sequenceFeed) Latest(context.Context) (appcast.Release, error) {
+	if f.index >= len(f.releases) {
+		return f.releases[len(f.releases)-1], nil
+	}
+	release := f.releases[f.index]
+	f.index++
+	return release, nil
+}
+
 type fakeInspector struct{ build string }
 
 func (f *fakeInspector) Inspect(context.Context, string, bool) (macos.Bundle, error) {
@@ -172,6 +186,53 @@ func TestWatcherRemovesStagedResidueWhenApplicationBecomesCurrentIndependently(t
 	}
 }
 
+// TestWatcherRemovesPreExistingOrphanResidueWithNoInMemoryBookkeeping is a
+// regression test for the closeout gap recorded in worklog decision #10
+// (ephemeral/worklog/202608241000-system-instability-audit.md): installing
+// the fixed binary cannot remove an already-orphaned staged bundle left by a
+// prior process, because the persisted staged path is no longer in watcher
+// memory. TestWatcherRemovesStagedResidueWhenApplicationBecomesCurrentIndependently
+// (above) only proves cleanup when w.prepared still references the staged
+// directory in memory. A real orphan — abandoned by a process that staged it
+// and then exited or restarted — leaves w.prepared nil on the next process's
+// first Step call, with only the on-disk directory as evidence it ever
+// existed. This test starts with watcher.prepared nil, places a
+// realistically named sibling staged directory next to AppPath on a real
+// temporary filesystem (matching Installer's stagedPath naming convention:
+// ".<AppBaseName>.codex-autoupdate-<build>.new"), drives the "application is
+// current" branch, and asserts the orphan is gone afterward.
+func TestWatcherRemovesPreExistingOrphanResidueWithNoInMemoryBookkeeping(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	appPath := filepath.Join(root, "Claude.app")
+	orphanPath := filepath.Join(root, ".Claude.app.codex-autoupdate-1.new")
+	if err := os.MkdirAll(orphanPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(orphanPath, "marker"), []byte("orphaned staged bundle"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	inspector := &fakeInspector{build: "1"}
+	installer := &fakeInstaller{inspector: inspector}
+	watcher := testWatcher(inspector, installer, fakeFeed{release: appcast.Release{Build: "1"}})
+	watcher.AppPath = appPath
+	// watcher.prepared is left nil (its zero value): this simulates a freshly
+	// started process that never observed this bundle's Prepare() call and so
+	// has no in-memory record that it exists.
+
+	state, err := watcher.Step(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state != Done {
+		t.Fatalf("state = %v, want Done", state)
+	}
+	if _, statErr := os.Stat(orphanPath); !os.IsNotExist(statErr) {
+		t.Fatalf("pre-existing orphaned staged bundle was not removed: %s (stat err = %v)", orphanPath, statErr)
+	}
+}
+
 // TestWatcherDoesNotLogDuplicateStatusOnUnchangedPendingState is a regression
 // test for the established bug recorded in ephemeral/proof/bug-adjudication.md
 // (bug D): the live installed watcher's stderr.log had grown to 35,470 lines /
@@ -203,6 +264,56 @@ func TestWatcherDoesNotLogDuplicateStatusOnUnchangedPendingState(t *testing.T) {
 	occurrences := strings.Count(buffer.String(), "waiting for active work to finish")
 	if occurrences != 1 {
 		t.Fatalf("logged %d identical status records across %d ticks with unchanged state, want 1 (log must not grow without bound while nothing changes)", occurrences, ticks)
+	}
+}
+
+// TestWatcherLogsActiveWorkAgainAfterInterveningCurrentVersionCycle is a
+// regression test for the closeout gap recorded in worklog decision #10
+// (ephemeral/worklog/202608241000-system-instability-audit.md):
+// active-status deduplication does not reset across an intervening
+// current-state branch. Watcher.Step's "application is current" branch
+// (comparison == 0) resets w.lastCurrentBuilds but never touches
+// w.lastActiveWork, which is otherwise only cleared when a Step observes
+// idle (non-active) work. So if the same work is still active when a later,
+// genuinely newer candidate appears, the dedup key from the earlier stale
+// candidate survives the intervening current cycle untouched and silently
+// swallows the log record for the new pending period — even though it
+// represents a distinct blocking event against a different candidate. This
+// test observes active work, drives a current-version cycle, then observes
+// the identical active work again for a newer candidate, and requires two
+// "waiting for active work to finish" records in total (one per distinct
+// pending period), not one.
+func TestWatcherLogsActiveWorkAgainAfterInterveningCurrentVersionCycle(t *testing.T) {
+	t.Parallel()
+	var buffer bytes.Buffer
+	inspector := &fakeInspector{build: "1"}
+	installer := &fakeInstaller{inspector: inspector}
+	watcher := testWatcher(inspector, installer, fakeFeed{})
+	watcher.Feed = &sequenceFeed{releases: []appcast.Release{
+		{Build: "2"}, // tick 1: candidate "2" is newer than installed "1"
+		{Build: "2"}, // tick 2: installed catches up to "2"; application is current
+		{Build: "3"}, // tick 3: a newer candidate "3" appears
+	}}
+	watcher.Logger = slog.New(slog.NewTextHandler(&buffer, nil))
+	watcher.Activity = &sequenceActivity{reports: []activity.Report{
+		{ActiveThreads: []string{"claude-task-pid:1"}}, // observed during tick 1
+		{ActiveThreads: []string{"claude-task-pid:1"}}, // observed again during tick 3
+	}}
+
+	if _, err := watcher.Step(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	inspector.build = "2"
+	if _, err := watcher.Step(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := watcher.Step(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+
+	occurrences := strings.Count(buffer.String(), "waiting for active work to finish")
+	if occurrences != 2 {
+		t.Fatalf("logged %d active-work status records across observe -> current -> observe(newer candidate), want 2 (an intervening current-version cycle must reset active-work dedup)", occurrences)
 	}
 }
 

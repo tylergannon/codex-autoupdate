@@ -1,0 +1,2 @@
+decision: Preserve the two closeout-gap tests, both proof runners, and all four established-bug commands byte-for-byte; production changes are limited to orphaned staged-bundle cleanup and the current-cycle active-work dedup reset.
+decision: Reuse the update package's exact-parent removal boundary for fresh-process residue cleanup without widening the Watcher Installer interface or changing test doubles.
