@@ -50,7 +50,7 @@ nodes:
       test -x ephemeral/proof/check-established-bugs.sh
       test -s ephemeral/proof/bug-adjudication.md
       changed="$(git diff --name-only HEAD; git ls-files --others --exclude-standard)"
-      bad="$(printf '%s\n' "$changed" | awk 'NF && $0 !~ /_test\.go$/ && $0 !~ /^ephemeral\// {print}')"
+      bad="$(printf '%s\n' "$changed" | awk 'NF && $0 !~ /_test\.go$/ && $0 !~ /^ephemeral\// && $0 !~ /^\.tractor\// {print}')"
       test -z "$bad"
       ephemeral/proof/check-established-bugs.sh baseline
     on_success: implement
