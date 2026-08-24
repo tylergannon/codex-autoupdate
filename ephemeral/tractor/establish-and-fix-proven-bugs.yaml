@@ -11,7 +11,7 @@ goal: >
   Apply fixes across ChatGPT and Claude wherever the same verified mechanism
   applies. Preserve establishment, review, and final proof artifacts under
   ephemeral/.
-start: baseline_gate
+start: continue_from_proven_baseline
 
 defaults:
   timeout: 1200s
@@ -19,6 +19,12 @@ defaults:
   max_retries: 1
 
 nodes:
+  - id: continue_from_proven_baseline
+    type: tool
+    tool_command: test -s ephemeral/proof/bug-adjudication.md
+    on_success: baseline_gate
+    on_error: establish
+
   - id: establish
     type: codergen
     max_visits: 1
