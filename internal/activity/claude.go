@@ -145,6 +145,9 @@ func isClaudeCodeProcess(command string) bool {
 	if strings.Contains(executable, "/.local/share/claude/versions/") {
 		return true
 	}
+	if strings.Contains(executable, "/.claude/remote/ccd-cli/") {
+		return true
+	}
 	for _, field := range fields[1:] {
 		cleaned := filepath.Clean(field)
 		if strings.Contains(cleaned, "/@anthropic-ai/claude-code/") {

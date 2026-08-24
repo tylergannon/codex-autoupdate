@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/tylergannon/codex-autoupdate/internal/activity"
@@ -57,6 +58,8 @@ type Watcher struct {
 	preparedInstalledBuild string
 	observedActive         bool
 	idleSince              time.Time
+	lastActiveWork         string
+	lastCurrentBuilds      string
 }
 
 func (w *Watcher) Run(ctx context.Context, once bool) error {
@@ -90,18 +93,34 @@ func (w *Watcher) Step(ctx context.Context, force bool) (State, error) {
 		return Done, fmt.Errorf("compare %s versions: %w", w.name(), err)
 	}
 	if comparison < 0 {
-		w.clearPrepared()
+		w.lastCurrentBuilds = ""
+		if err := w.removePrepared(); err != nil {
+			return Done, err
+		}
 		w.logger().Warn("available release is older than installed application; refusing downgrade", "harness", w.id(), "installed_build", installed.Build, "available_build", candidate.Build)
 		return Done, nil
 	}
 	if comparison == 0 && !force {
-		w.clearPrepared()
-		w.logger().Info("application is current", "harness", w.id(), "installed_build", installed.Build, "available_build", candidate.Build)
+		if err := w.removePrepared(); err != nil {
+			return Done, err
+		}
+		if err := update.RemoveStagedResidue(w.AppPath); err != nil {
+			return Done, fmt.Errorf("remove abandoned %s replacement: %w", w.name(), err)
+		}
+		w.lastActiveWork = ""
+		builds := installed.Build + "\x00" + candidate.Build
+		if builds != w.lastCurrentBuilds {
+			w.logger().Info("application is current", "harness", w.id(), "installed_build", installed.Build, "available_build", candidate.Build)
+			w.lastCurrentBuilds = builds
+		}
 		return Done, nil
 	}
+	w.lastCurrentBuilds = ""
 	if w.prepared != nil && installed.Build != w.preparedInstalledBuild {
 		w.logger().Info("installed application changed while replacement was staged; abandoning stale work", "harness", w.id(), "previous_build", w.preparedInstalledBuild, "installed_build", installed.Build)
-		w.clearPrepared()
+		if err := w.removePrepared(); err != nil {
+			return Done, err
+		}
 		if comparison <= 0 {
 			return Done, nil
 		}
@@ -126,9 +145,14 @@ func (w *Watcher) Step(ctx context.Context, force bool) (State, error) {
 	w.logWarnings(report)
 	idleSince := w.observeActivity(report)
 	if report.Active() {
-		w.logger().Info("waiting for active work to finish", "harness", w.id(), "work", report.ActiveThreads)
+		work := strings.Join(report.ActiveThreads, "\x00")
+		if work != w.lastActiveWork {
+			w.logger().Info("waiting for active work to finish", "harness", w.id(), "work", report.ActiveThreads)
+			w.lastActiveWork = work
+		}
 		return Pending, nil
 	}
+	w.lastActiveWork = ""
 	if !idleSince.IsZero() {
 		remaining := w.IdleWindow - w.now().Sub(idleSince)
 		if remaining > 0 {
@@ -147,12 +171,16 @@ func (w *Watcher) Step(ctx context.Context, force bool) (State, error) {
 	}
 	if comparison > 0 || comparison == 0 && !force {
 		w.logger().Info("application updated independently while watcher waited", "harness", w.id(), "installed_build", installed.Build)
-		w.clearPrepared()
+		if err := w.removePrepared(); err != nil {
+			return Done, err
+		}
 		return Done, nil
 	}
 	if installed.Build != w.preparedInstalledBuild {
 		w.logger().Info("installed application changed while replacement was staged; abandoning stale work", "harness", w.id(), "previous_build", w.preparedInstalledBuild, "installed_build", installed.Build)
-		w.clearPrepared()
+		if err := w.removePrepared(); err != nil {
+			return Done, err
+		}
 		return Pending, nil
 	}
 
@@ -189,6 +217,16 @@ func (w *Watcher) Step(ctx context.Context, force bool) (State, error) {
 func (w *Watcher) clearPrepared() {
 	w.prepared = nil
 	w.preparedInstalledBuild = ""
+}
+
+func (w *Watcher) removePrepared() error {
+	if w.prepared != nil {
+		if err := update.RemovePrepared(*w.prepared); err != nil {
+			return fmt.Errorf("remove abandoned %s replacement: %w", w.name(), err)
+		}
+	}
+	w.clearPrepared()
+	return nil
 }
 
 func (w *Watcher) logWarnings(report activity.Report) {

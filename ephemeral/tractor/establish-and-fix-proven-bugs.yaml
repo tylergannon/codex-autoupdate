@@ -1,0 +1,157 @@
+name: establish-and-fix-proven-bugs
+goal: >
+  Establish which candidate codex-autoupdate defects are actual bugs, then fix
+  every established bug and no others. Read the five independent audit reports
+  under ephemeral/reviews/202608241000-system-instability-*.md, the refreshed
+  GitHub issue context already captured in the repository history, and the
+  current implementation. A bug is established only when it has its own
+  deterministic binary regression command that fails against the unchanged
+  production implementation and later passes unchanged after the fix. Reject
+  and leave unfixed every candidate that cannot meet that red/green standard.
+  Apply fixes across ChatGPT and Claude wherever the same verified mechanism
+  applies. Preserve establishment, review, and final proof artifacts under
+  ephemeral/.
+start: continue_from_proven_baseline
+
+defaults:
+  timeout: 1200s
+  fidelity: none
+  max_retries: 1
+
+nodes:
+  - id: continue_from_proven_baseline
+    type: tool
+    tool_command: test -s ephemeral/proof/bug-adjudication.md
+    on_success: baseline_gate
+    on_error: establish
+
+  - id: establish
+    type: codergen
+    max_visits: 1
+    llm_provider: anthropic
+    llm_model: claude-sonnet-5
+    reasoning_effort: high
+    prompt: >
+      Independently inspect the audit reports, current source, tests, and live
+      read-only host state. Adjudicate every candidate finding. Do not edit
+      production code. For each bug you accept, add one focused regression test
+      and one executable command under ephemeral/proof/established-bugs/ whose
+      exit status is nonzero on the current production implementation and will
+      become zero only when that specific behavior is corrected. Commands must
+      be independent so one failure cannot stand in for another. Create
+      ephemeral/proof/check-established-bugs.sh with modes `baseline` and
+      `fixed`; baseline must require every command to fail, fixed must require
+      every identical command to pass, and both must fail if no bug commands
+      exist. Write ephemeral/proof/bug-adjudication.md with observed evidence,
+      the exact binary command for each accepted bug, its baseline exit status,
+      and every rejected candidate with the reason it lacks proof. Actually run
+      every command. Do not make any production change.
+    edges:
+      - to: baseline_gate
+
+  - id: baseline_gate
+    type: tool
+    tool_command: |
+      set -eu
+      test -x ephemeral/proof/check-established-bugs.sh
+      test -s ephemeral/proof/bug-adjudication.md
+      changed="$(git diff --name-only HEAD; git ls-files --others --exclude-standard)"
+      bad="$(printf '%s\n' "$changed" | awk 'NF && $0 !~ /_test\.go$/ && $0 !~ /^ephemeral\// && $0 !~ /^\.tractor\// {print}')"
+      test -z "$bad"
+      ephemeral/proof/check-established-bugs.sh baseline
+    on_success: implement
+    on_error: failure
+
+  - id: implement
+    type: codergen
+    max_visits: 6
+    llm_provider: openai
+    llm_model: gpt-5.6-sol
+    reasoning_effort: high
+    prompt: >
+      Read ephemeral/proof/bug-adjudication.md, every established regression,
+      and the latest independent review artifact when present. Implement the
+      smallest idiomatic production changes that make all established commands
+      pass. Do not alter, weaken, rename, skip, or delete the established tests
+      or commands. Do not fix rejected or untested candidates. Apply a verified
+      shared mechanism to both configured desktop harnesses when applicable.
+      Run the established fixed-mode gate and focused tests before routing on.
+    edges:
+      - to: implementation_gate
+
+  - id: implementation_gate
+    type: tool
+    max_visits: 8
+    tool_command: |
+      set -eu
+      ephemeral/proof/check-established-bugs.sh fixed
+      git diff --check
+      go mod verify
+      go vet ./...
+      golangci-lint run ./...
+      go test -race ./...
+    on_success: review
+    on_error: implement
+
+  - id: review
+    type: codergen
+    max_visits: 4
+    llm_provider: gemini
+    llm_model: gemini-3.1-pro-low
+    reasoning_effort: high
+    prompt: >
+      Independently review the entire current diff, surrounding code, the
+      original audit reports, bug adjudication, and executable red/green proof.
+      Run the established commands and relevant full checks yourself. Enforce
+      that production was changed only for bugs with individual binary baseline
+      failures, that tests were not weakened, and that fixes are minimal,
+      idiomatic, and cover both desktop harnesses where applicable. Do not edit
+      code or tests. Write a new complete review to the next unused path
+      ephemeral/reviews/20260824-tractor-fix-round-NN.md, then write that path as
+      the only line of ephemeral/reviews/20260824-tractor-fix-latest.txt. The
+      report must begin with exactly `Outcome: no findings` or
+      `Outcome: material findings remain`; include concrete evidence for every
+      material finding.
+    edges:
+      - to: review_gate
+
+  - id: review_gate
+    type: tool
+    max_visits: 4
+    tool_command: |
+      set -eu
+      latest="$(cat ephemeral/reviews/20260824-tractor-fix-latest.txt)"
+      test -s "$latest"
+      head -n 1 "$latest" | grep -Fx 'Outcome: no findings'
+      ephemeral/proof/check-established-bugs.sh fixed
+    on_success: validate
+    on_error: implement
+
+  - id: validate
+    type: codergen
+    max_visits: 1
+    llm_provider: anthropic
+    llm_model: claude-sonnet-5
+    reasoning_effort: high
+    prompt: >
+      Validate the current built tool as a fresh operator. Run every established
+      bug command independently, the full race-enabled test suite, and any
+      safe real-process or real-filesystem probe needed to demonstrate the
+      user-visible tooling behavior. Do not edit production code or tests.
+      Write ephemeral/proof/tractor-final-validation.md containing commands,
+      exit statuses, relevant outputs, current git SHA/diff identity, and one
+      final line exactly `Outcome: PASS` only if every established bug command
+      passes unchanged and no claimed behavior remains unproved.
+    edges:
+      - to: final_gate
+
+  - id: final_gate
+    type: tool
+    tool_command: |
+      set -eu
+      ephemeral/proof/check-established-bugs.sh fixed
+      tail -n 1 ephemeral/proof/tractor-final-validation.md | grep -Fx 'Outcome: PASS'
+      git diff --check
+      go test -race ./...
+    on_success: success
+    on_error: implement

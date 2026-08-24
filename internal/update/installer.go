@@ -24,6 +24,44 @@ type Prepared struct {
 	StagedPath string
 }
 
+// RemovePrepared removes a staged application bundle that will not be applied.
+func RemovePrepared(prepared Prepared) error {
+	if prepared.StagedPath == "" {
+		return nil
+	}
+	path := filepath.Clean(prepared.StagedPath)
+	base := filepath.Base(path)
+	if !filepath.IsAbs(path) || !strings.HasPrefix(base, ".") ||
+		!strings.Contains(base, ".app.codex-autoupdate-") || !strings.HasSuffix(base, ".new") {
+		return fmt.Errorf("refusing to remove invalid staged application path: %s", prepared.StagedPath)
+	}
+	if err := removeExact(path, filepath.Dir(path)); err != nil {
+		return fmt.Errorf("remove staged application %s: %w", path, err)
+	}
+	return nil
+}
+
+// RemoveStagedResidue removes staged application bundles abandoned by an
+// earlier updater process.
+func RemoveStagedResidue(appPath string) error {
+	appPath = filepath.Clean(appPath)
+	if !filepath.IsAbs(appPath) || filepath.Ext(appPath) != ".app" {
+		return fmt.Errorf("invalid application path for staged-residue cleanup: %s", appPath)
+	}
+	parent := filepath.Dir(appPath)
+	pattern := filepath.Join(parent, "."+filepath.Base(appPath)+".codex-autoupdate-*.new")
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return fmt.Errorf("find staged application residue: %w", err)
+	}
+	for _, path := range matches {
+		if err := removeExact(path, parent); err != nil {
+			return fmt.Errorf("remove staged application residue %s: %w", path, err)
+		}
+	}
+	return nil
+}
+
 type Installer struct {
 	AppPath       string
 	CacheDir      string

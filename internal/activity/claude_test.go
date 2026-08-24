@@ -121,6 +121,44 @@ func TestClaudeDetectorDoesNotTreatDesktopHelpersAsClaudeCode(t *testing.T) {
 	}
 }
 
+// TestClaudeDetectorRecognizesRemoteCliRuntime is a regression test for the
+// established bug recorded in ephemeral/proof/bug-adjudication.md (bug A):
+// a live `~/.claude/remote/ccd-cli/<version>` process, reproduced independently
+// by two safety-audit reviewers on 2026-08-24 (PIDs 28558/80886, one granted
+// mcp__computer-use), is invisible to both Claude activity routes. Its
+// basename is a version string, not "claude"/"claude-code" and not under
+// ".local/share/claude/versions/", so isClaudeCodeProcess rejects it; its
+// stdio are anonymous pipes, not files under TaskRoot, so the stdio fallback
+// also misses it. The watcher (internal/watch/watch.go) then treats this
+// harness as idle and may replace/restart Claude Desktop underneath it.
+func TestClaudeDetectorRecognizesRemoteCliRuntime(t *testing.T) {
+	t.Parallel()
+	started := time.Now().Add(-time.Minute)
+	report, err := (ClaudeDetector{
+		AppPath:    "/Applications/Claude.app",
+		ClaudeData: t.TempDir(),
+		TaskRoot:   t.TempDir(),
+		Processes: claudeProcesses{
+			processes: []macos.Process{
+				{
+					PID:     28558,
+					Started: started,
+					Command: "/Users/tyler/.claude/remote/ccd-cli/2.1.237 --resume=80d8f9bf-f2a4-4266-bafa-385097d794d3 --allowedTools mcp__computer-use,mcp__slack",
+				},
+			},
+			// openFiles is intentionally empty: live lsof evidence showed fds
+			// 0/1/2 for this process were anonymous PIPEs, not files under
+			// /private/tmp/claude-<uid>, so the stdio fallback cannot see it either.
+		},
+	}).Detect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Active() {
+		t.Fatalf("live remote Claude Code runtime was not reported active: %+v", report)
+	}
+}
+
 func TestClaudeDetectorExcludesDesktopProcessesOutsideConfiguredAppPath(t *testing.T) {
 	t.Parallel()
 	started := time.Now().Add(-time.Hour)
