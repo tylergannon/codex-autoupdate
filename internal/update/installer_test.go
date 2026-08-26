@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -238,6 +239,107 @@ func TestApplyStopsEveryBundleProcessBeforeReplacement(t *testing.T) {
 	}
 }
 
+// The 2026-08-26 incident: a detached, PATH-resolved codex app-server
+// (Homebrew 0.149.1, parented to launchd via Codex's SSH bootstrap) held
+// $CODEX_HOME/app-server-control/app-server-control.sock across a ChatGPT
+// update. It is not a bundle process, so bundle quiescence passed and the
+// bundle was replaced — but the relaunched application's app-server could not
+// bind the socket ("app-server control socket is already in use") and every
+// task failed code-mode negotiation against the version-skewed stale runtime.
+func staleSocketFixture(t *testing.T, runner *fixtureRunner) (*Installer, Prepared, string) {
+	t.Helper()
+	root := t.TempDir()
+	appPath := filepath.Join(root, "ChatGPT.app")
+	stagedPath := filepath.Join(root, ".ChatGPT.app.codex-autoupdate-2.new")
+	writeFakeBundle(t, appPath, "1.0", 1)
+	writeFakeBundle(t, stagedPath, "2.0", 2)
+	codexHome := filepath.Join(root, "codex-home")
+	socketPath := filepath.Join(codexHome, "app-server-control", "app-server-control.sock")
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(socketPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner.appPath = appPath
+	runner.codexHome = codexHome
+	installer := &Installer{
+		AppPath:       appPath,
+		CacheDir:      filepath.Join(root, "cache"),
+		QuitTimeout:   time.Nanosecond,
+		LaunchTimeout: time.Second,
+		Runner:        runner,
+		Processes:     macos.ProcessFinder{Runner: runner, CodexHome: codexHome},
+	}
+	prepared := Prepared{Release: appcast.Release{Build: "2", Version: "2.0"}, StagedPath: stagedPath}
+	return installer, prepared, socketPath
+}
+
+func TestApplyTerminatesStaleAppServerHoldingControlSocket(t *testing.T) {
+	t.Parallel()
+	runner := &fixtureRunner{launched: true, staleSocketPID: 900, staleAlive: true}
+	installer, prepared, socketPath := staleSocketFixture(t, runner)
+	if err := installer.Apply(context.Background(), prepared, nil); err != nil {
+		t.Fatal(err)
+	}
+	if build := readBuild(t, installer.AppPath); build != "2" {
+		t.Fatalf("installed build %s, want 2", build)
+	}
+	runner.mu.Lock()
+	staleAlive := runner.staleAlive
+	commands := append([]string(nil), runner.commands...)
+	runner.mu.Unlock()
+	if staleAlive {
+		t.Fatal("stale app-server survived the update while holding the control socket")
+	}
+	want := []string{"/usr/bin/osascript", "/bin/kill -TERM 900", "/usr/bin/open"}
+	if fmt.Sprint(commands) != fmt.Sprint(want) {
+		t.Fatalf("command sequence %v, want %v", commands, want)
+	}
+	if _, err := os.Stat(socketPath); !os.IsNotExist(err) {
+		t.Fatalf("leftover control socket was not removed: %v", err)
+	}
+}
+
+func TestApplyEscalatesToSIGKILLWhenStaleSocketHolderIgnoresTERM(t *testing.T) {
+	t.Parallel()
+	runner := &fixtureRunner{launched: true, staleSocketPID: 900, staleAlive: true, staleIgnoresTERM: true}
+	installer, prepared, socketPath := staleSocketFixture(t, runner)
+	if err := installer.Apply(context.Background(), prepared, nil); err != nil {
+		t.Fatal(err)
+	}
+	runner.mu.Lock()
+	staleAlive := runner.staleAlive
+	commands := append([]string(nil), runner.commands...)
+	runner.mu.Unlock()
+	if staleAlive {
+		t.Fatal("stale app-server survived SIGKILL escalation")
+	}
+	want := []string{"/usr/bin/osascript", "/bin/kill -TERM 900", "/bin/kill -KILL 900", "/usr/bin/open"}
+	if fmt.Sprint(commands) != fmt.Sprint(want) {
+		t.Fatalf("command sequence %v, want %v", commands, want)
+	}
+	if _, err := os.Stat(socketPath); !os.IsNotExist(err) {
+		t.Fatalf("leftover control socket was not removed: %v", err)
+	}
+}
+
+func TestApplyRefusesActivationWhenStaleSocketHolderCannotBeStopped(t *testing.T) {
+	t.Parallel()
+	runner := &fixtureRunner{launched: true, staleSocketPID: 900, staleAlive: true, staleUnkillable: true}
+	installer, prepared, _ := staleSocketFixture(t, runner)
+	err := installer.Apply(context.Background(), prepared, nil)
+	if err == nil || !strings.Contains(err.Error(), "app-server control socket") {
+		t.Fatalf("expected control socket refusal, got %v", err)
+	}
+	if build := readBuild(t, installer.AppPath); build != "1" {
+		t.Fatalf("installed build %s after refusal, want 1", build)
+	}
+	if build := readBuild(t, prepared.StagedPath); build != "2" {
+		t.Fatalf("staged build %s after refusal, want 2", build)
+	}
+}
+
 func TestApplyRefusesReplacementWhenBundleProcessRespawns(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -362,12 +464,118 @@ func TestShutdownQuiescesRealBundleProcessTree(t *testing.T) {
 	_ = command.Wait()
 }
 
+// TestQuiesceControlSocketKillsRealDetachedHolder reproduces the 2026-08-26
+// incident with real processes: a TERM-ignoring holder running from a
+// non-bundle path binds the real control socket, exactly like the detached
+// Homebrew codex app-server that survived the ChatGPT 7019→7119 update and
+// left every task unable to negotiate with the code-mode host.
+func TestQuiesceControlSocketKillsRealDetachedHolder(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("real control socket fixture requires macOS")
+	}
+	root := t.TempDir()
+	// The socket must live under a short path: macOS limits unix socket paths
+	// to 104 bytes, and t.TempDir() paths under /var/folders exceed that.
+	codexHome, err := os.MkdirTemp("/tmp", "cau")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(codexHome) })
+	socketPath := filepath.Join(codexHome, "app-server-control", "app-server-control.sock")
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	holderPath := filepath.Join(root, "opt", "codex")
+	if err := os.MkdirAll(filepath.Dir(holderPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(executable, holderPath); err != nil {
+		t.Fatalf("link socket holder fixture: %v", err)
+	}
+	readyDir := filepath.Join(root, "ready")
+	if err := os.MkdirAll(readyDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(holderPath, "-test.run=^TestBundleProcessFixtureProcess$")
+	command.Env = append(os.Environ(),
+		"CODEX_AUTOUPDATE_FIXTURE_ROLE=socketholder",
+		"CODEX_AUTOUPDATE_FIXTURE_READY_DIR="+readyDir,
+		"CODEX_AUTOUPDATE_FIXTURE_SOCKET="+socketPath,
+	)
+	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = command.Process.Kill()
+		_, _ = command.Process.Wait()
+	}()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(filepath.Join(readyDir, "socketholder")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("socket holder fixture did not start")
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	finder := macos.ProcessFinder{CodexHome: codexHome}
+	holders, checked, err := finder.ControlSocketProcesses(context.Background())
+	if err != nil || !checked || len(holders) == 0 {
+		t.Fatalf("real lsof did not find the socket holder: holders=%+v checked=%t err=%v", holders, checked, err)
+	}
+
+	appPath := filepath.Join(root, "Fixture.app")
+	if err := os.MkdirAll(appPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	installer := Installer{
+		AppPath:     appPath,
+		QuitTimeout: 200 * time.Millisecond,
+		Processes:   macos.ProcessFinder{Runner: macos.ExecRunner{}, CodexHome: codexHome},
+		Identity: macos.Identity{
+			Name:             "Fixture Desktop",
+			BundleIdentifier: "com.example.codex-autoupdate-fixture",
+			Executable:       "Fixture",
+		},
+	}
+	if err := installer.quiesceControlSocket(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	remaining, _, err := finder.ControlSocketProcesses(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("detached socket holder survived quiescence: %+v", remaining)
+	}
+	if _, err := os.Stat(socketPath); !os.IsNotExist(err) {
+		t.Fatalf("control socket was not removed: %v", err)
+	}
+	_ = command.Wait()
+}
+
 func TestBundleProcessFixtureProcess(t *testing.T) {
 	role := os.Getenv("CODEX_AUTOUPDATE_FIXTURE_ROLE")
 	if role == "" {
 		return
 	}
 	readyDir := os.Getenv("CODEX_AUTOUPDATE_FIXTURE_READY_DIR")
+	if role == "socketholder" {
+		listener, err := net.Listen("unix", os.Getenv("CODEX_AUTOUPDATE_FIXTURE_SOCKET"))
+		if err != nil {
+			os.Exit(4)
+		}
+		defer func() { _ = listener.Close() }()
+		signal.Ignore(syscall.SIGTERM)
+	}
 	if role == "main" {
 		children := []struct {
 			role     string
@@ -655,11 +863,16 @@ type fixtureRunner struct {
 	termRefused      bool
 	helpers          map[int]bool
 	respawnOnPSCall  int
+	codexHome        string
+	staleSocketPID   int
+	staleIgnoresTERM bool
+	staleUnkillable  bool
 
-	mu       sync.Mutex
-	launched bool
-	commands []string
-	psCalls  int
+	mu         sync.Mutex
+	launched   bool
+	staleAlive bool
+	commands   []string
+	psCalls    int
 }
 
 func (r *fixtureRunner) CombinedOutput(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -721,6 +934,10 @@ func (r *fixtureRunner) CombinedOutput(ctx context.Context, name string, args ..
 			if pid == 123 {
 				r.launched = false
 			}
+			if r.staleSocketPID != 0 && pid == r.staleSocketPID && !r.staleUnkillable &&
+				(signal == "-KILL" || !r.staleIgnoresTERM) {
+				r.staleAlive = false
+			}
 			ignoresTERM, helper := r.helpers[pid]
 			if helper && (signal == "-KILL" || !ignoresTERM) {
 				delete(r.helpers, pid)
@@ -728,6 +945,18 @@ func (r *fixtureRunner) CombinedOutput(ctx context.Context, name string, args ..
 		}
 		r.mu.Unlock()
 		return nil, nil
+	case "/usr/sbin/lsof":
+		socketPath := filepath.Join(r.codexHome, "app-server-control", "app-server-control.sock")
+		if r.codexHome == "" || len(args) == 0 || args[len(args)-1] != socketPath {
+			return nil, fmt.Errorf("unexpected lsof arguments %v", args)
+		}
+		r.mu.Lock()
+		alive := r.staleAlive
+		r.mu.Unlock()
+		if alive {
+			return []byte(strconv.Itoa(r.staleSocketPID) + "\n"), nil
+		}
+		return nil, fmt.Errorf("exit status 1")
 	case "/bin/ps":
 		r.mu.Lock()
 		r.psCalls++
@@ -749,6 +978,12 @@ func (r *fixtureRunner) CombinedOutput(ctx context.Context, name string, args ..
 			if _, ok := helpers[pid]; ok {
 				output += fmt.Sprintf("%d Fri Jul 17 09:00:00 2026 %s/Contents/Helpers/helper-%d\n", pid, r.appPath, pid)
 			}
+		}
+		r.mu.Lock()
+		staleAlive := r.staleAlive
+		r.mu.Unlock()
+		if staleAlive {
+			output += fmt.Sprintf("%d Fri Jul 17 08:00:00 2026 /opt/homebrew/Caskroom/codex/0.149.1/bin/codex -c features.code_mode_host=true app-server --listen unix://\n", r.staleSocketPID)
 		}
 		return []byte(output), nil
 	default:
