@@ -3,6 +3,7 @@ package macos
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -273,11 +274,49 @@ func (f ProcessFinder) OpenFilesUnder(ctx context.Context, root string) (map[int
 	return result, nil
 }
 
-func (f ProcessFinder) controlSocketHolders(ctx context.Context) (map[int]struct{}, bool, error) {
+// ControlSocketPath returns the desktop app-server control socket path, or
+// the empty string when no Codex home is configured.
+func (f ProcessFinder) ControlSocketPath() string {
 	if f.CodexHome == "" {
+		return ""
+	}
+	return filepath.Join(f.CodexHome, "app-server-control", "app-server-control.sock")
+}
+
+// ControlSocketProcesses returns the processes holding the desktop app-server
+// control socket. checked is false when no Codex home is configured.
+func (f ProcessFinder) ControlSocketProcesses(ctx context.Context) (processes []Process, checked bool, err error) {
+	holders, checked, err := f.controlSocketHolders(ctx)
+	if !checked || err != nil || len(holders) == 0 {
+		return nil, checked, err
+	}
+	all, err := f.All(ctx)
+	if err != nil {
+		return nil, true, err
+	}
+	matching := matchingProcesses(all, func(process Process) bool {
+		_, holds := holders[process.PID]
+		return holds
+	})
+	for pid := range holders {
+		if !slices.ContainsFunc(matching, func(process Process) bool { return process.PID == pid }) {
+			matching = append(matching, Process{PID: pid, Command: "(unknown)"})
+		}
+	}
+	return matching, true, nil
+}
+
+func (f ProcessFinder) controlSocketHolders(ctx context.Context) (map[int]struct{}, bool, error) {
+	socketPath := f.ControlSocketPath()
+	if socketPath == "" {
 		return nil, false, nil
 	}
-	socketPath := filepath.Join(f.CodexHome, "app-server-control", "app-server-control.sock")
+	if _, err := os.Stat(socketPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil, true, nil
+		}
+		return nil, true, fmt.Errorf("inspect Desktop app-server control socket: %w", err)
+	}
 	output, err := f.runner().CombinedOutput(ctx, "/usr/sbin/lsof", "-n", "-t", socketPath)
 	if err != nil {
 		if strings.TrimSpace(string(output)) == "" {

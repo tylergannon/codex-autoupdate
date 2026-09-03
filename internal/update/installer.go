@@ -227,6 +227,9 @@ func (i *Installer) Apply(ctx context.Context, prepared Prepared, preflight func
 	if err := i.requireBundleQuiescent(ctx); err != nil {
 		return err
 	}
+	if err := i.quiesceControlSocket(ctx); err != nil {
+		return err
+	}
 
 	backupPath := filepath.Join(filepath.Dir(i.AppPath), fmt.Sprintf(".%s.codex-autoupdate-backup-%s-%d", filepath.Base(i.AppPath), release.Key(current.Build), time.Now().UnixNano()))
 	if err := os.Rename(i.AppPath, backupPath); err != nil {
@@ -373,7 +376,7 @@ func (i *Installer) shutdown(ctx context.Context) error {
 		return nil
 	}
 	i.logger().Warn("application shutdown incomplete; sending SIGTERM to bundle processes", "harness", i.identity().Name, "pids", processIDs(processes), "error", gracefulCause)
-	termErr := i.signalProcesses(ctx, "TERM", processes)
+	termErr := i.signalProcesses(ctx, "TERM", i.identity().Name+" bundle processes", processes)
 	exitErr := i.waitForBundleExit(ctx)
 	if exitErr == nil {
 		return nil
@@ -390,7 +393,7 @@ func (i *Installer) shutdown(ctx context.Context) error {
 		return nil
 	}
 	i.logger().Warn("bundle processes survived SIGTERM; sending SIGKILL", "harness", i.identity().Name, "pids", processIDs(processes), "error", exitErr)
-	killErr := i.signalProcesses(ctx, "KILL", processes)
+	killErr := i.signalProcesses(ctx, "KILL", i.identity().Name+" bundle processes", processes)
 	finalErr := i.waitForBundleExit(ctx)
 	if finalErr == nil {
 		return nil
@@ -398,14 +401,90 @@ func (i *Installer) shutdown(ctx context.Context) error {
 	return errors.Join(gracefulCause, termErr, exitErr, killErr, fmt.Errorf("%s bundle still running after SIGKILL: %w", i.identity().Name, finalErr))
 }
 
-func (i *Installer) signalProcesses(ctx context.Context, signal string, processes []macos.Process) error {
+func (i *Installer) signalProcesses(ctx context.Context, signal, what string, processes []macos.Process) error {
 	args := []string{"-" + signal}
 	for _, process := range processes {
 		args = append(args, strconv.Itoa(process.PID))
 	}
 	output, err := i.runner().CombinedOutput(ctx, "/bin/kill", args...)
 	if err != nil {
-		return commandError("send SIG"+signal+" to "+i.identity().Name+" bundle processes", output, err)
+		return commandError("send SIG"+signal+" to "+what, output, err)
+	}
+	return nil
+}
+
+// quiesceControlSocket terminates processes that still hold the desktop
+// app-server control socket after the application bundle has quiesced, then
+// removes the leftover socket file so the relaunched application can bind it.
+// A holder at this point cannot be part of the installed bundle; it is a
+// detached, version-skewed runtime (for example a PATH-resolved codex
+// app-server started by an SSH bootstrap) that would keep the socket across
+// the replacement and break code-mode negotiation for every task in the
+// updated application.
+func (i *Installer) quiesceControlSocket(ctx context.Context) error {
+	processes, checked, err := i.processes().ControlSocketProcesses(ctx)
+	if err != nil {
+		return fmt.Errorf("find %s app-server control socket holders: %w", i.identity().Name, err)
+	}
+	if !checked {
+		return nil
+	}
+	if len(processes) == 0 {
+		return i.removeControlSocket()
+	}
+	what := "stale " + i.identity().Name + " app-server control socket holders"
+	i.logger().Warn("stale processes hold the app-server control socket; sending SIGTERM", "harness", i.identity().Name, "pids", processIDs(processes), "commands", processCommands(processes))
+	termErr := i.signalProcesses(ctx, "TERM", what, processes)
+	waitErr := i.waitForControlSocketRelease(ctx)
+	if waitErr == nil {
+		return i.removeControlSocket()
+	}
+	if isContextError(waitErr) {
+		return waitErr
+	}
+
+	processes, _, err = i.processes().ControlSocketProcesses(ctx)
+	if err != nil {
+		return errors.Join(termErr, fmt.Errorf("recheck %s app-server control socket holders after SIGTERM: %w", i.identity().Name, err))
+	}
+	if len(processes) == 0 {
+		return i.removeControlSocket()
+	}
+	i.logger().Warn("stale app-server control socket holders survived SIGTERM; sending SIGKILL", "harness", i.identity().Name, "pids", processIDs(processes), "error", waitErr)
+	killErr := i.signalProcesses(ctx, "KILL", what, processes)
+	finalErr := i.waitForControlSocketRelease(ctx)
+	if finalErr == nil {
+		return i.removeControlSocket()
+	}
+	return errors.Join(termErr, waitErr, killErr, fmt.Errorf("refusing to activate %s while stale processes hold the app-server control socket: %w", i.identity().Name, finalErr))
+}
+
+func (i *Installer) waitForControlSocketRelease(ctx context.Context) error {
+	deadline := time.Now().Add(i.QuitTimeout)
+	for {
+		processes, _, err := i.processes().ControlSocketProcesses(ctx)
+		if err != nil {
+			return err
+		}
+		if len(processes) == 0 {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%d process(es) still hold the %s app-server control socket after %s (PIDs: %s)", len(processes), i.identity().Name, i.QuitTimeout, processIDs(processes))
+		}
+		if err := sleep(ctx, 500*time.Millisecond); err != nil {
+			return err
+		}
+	}
+}
+
+func (i *Installer) removeControlSocket() error {
+	path := i.processes().ControlSocketPath()
+	if path == "" {
+		return nil
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove leftover %s app-server control socket: %w", i.identity().Name, err)
 	}
 	return nil
 }
@@ -453,6 +532,14 @@ func processIDs(processes []macos.Process) string {
 		ids = append(ids, strconv.Itoa(process.PID))
 	}
 	return strings.Join(ids, ",")
+}
+
+func processCommands(processes []macos.Process) string {
+	commands := make([]string, 0, len(processes))
+	for _, process := range processes {
+		commands = append(commands, process.Command)
+	}
+	return strings.Join(commands, "; ")
 }
 
 func mainApplication(processes []macos.Process, appPath, executableName string) *macos.Process {

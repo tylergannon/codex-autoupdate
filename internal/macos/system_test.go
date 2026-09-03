@@ -3,6 +3,8 @@ package macos
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -46,10 +48,26 @@ func TestProcessFinderFindsNewestDesktopAppServer(t *testing.T) {
 	}
 }
 
+// fakeCodexHome creates a Codex home containing an app-server control socket
+// file on disk, so the finder's existence pre-check passes and the faked lsof
+// output decides who holds it.
+func fakeCodexHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	socketPath := filepath.Join(home, "app-server-control", "app-server-control.sock")
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(socketPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return home
+}
+
 func TestProcessFinderFindsControlSocketAppServer(t *testing.T) {
 	t.Parallel()
 	appPath := "/Applications/ChatGPT.app"
-	codexHome := "/Users/test/.codex"
+	codexHome := fakeCodexHome(t)
 	processes := ` 11 Fri Jul 17 09:00:00 2026 /Applications/ChatGPT.app/Contents/Resources/codex app-server
  12 Fri Jul 17 10:00:00 2026 codex -c features.code_mode_host=true app-server --listen unix://
  13 Fri Jul 17 11:00:00 2026 codex app-server proxy
@@ -70,7 +88,7 @@ func TestProcessFinderFindsControlSocketAppServer(t *testing.T) {
 func TestProcessFinderFallsBackWhenControlSocketHasNoOwner(t *testing.T) {
 	t.Parallel()
 	appPath := "/Applications/ChatGPT.app"
-	codexHome := "/Users/test/.codex"
+	codexHome := fakeCodexHome(t)
 	runner := commandRunner{
 		"/bin/ps -axo pid=,lstart=,command=":                                                " 11 Fri Jul 17 09:00:00 2026 " + appPath + "/Contents/Resources/codex app-server\n",
 		"/usr/sbin/lsof -n -t " + codexHome + "/app-server-control/app-server-control.sock": "",
